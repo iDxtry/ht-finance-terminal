@@ -32,14 +32,21 @@ function writeCache(key, value) {
 async function cacheScope(supabase) {
   // Keep authenticated responses separate from the public guest cache. This
   // prevents a quote for a member-only symbol from surviving sign-out.
-  if (typeof supabase?.auth?.getSession !== 'function') return null;
+  const publicKey = typeof supabase?.supabaseKey === 'string' ? supabase.supabaseKey : '';
+  if (typeof supabase?.auth?.getSession !== 'function') {
+    return { key: null, authorizationToken: publicKey };
+  }
   try {
     const { data, error } = await supabase.auth.getSession();
-    if (error) return null;
-    const userId = data?.session?.user?.id;
-    return userId ? `member:${userId}` : 'public';
+    if (error) return { key: null, authorizationToken: publicKey };
+    const session = data?.session;
+    const userId = session?.user?.id;
+    return {
+      key: userId ? `member:${userId}` : 'public',
+      authorizationToken: session?.access_token || publicKey,
+    };
   } catch {
-    return null;
+    return { key: null, authorizationToken: publicKey };
   }
 }
 
@@ -162,7 +169,7 @@ async function requestMarketData(supabase, body, cacheKey) {
     });
   }
   const scope = await cacheScope(supabase);
-  const scopedCacheKey = scope ? `${scope}:${cacheKey}` : null;
+  const scopedCacheKey = scope.key ? `${scope.key}:${cacheKey}` : null;
   const cached = scopedCacheKey ? readCache(scopedCacheKey) : null;
   if (cached) return cached;
 
@@ -174,7 +181,16 @@ async function requestMarketData(supabase, body, cacheKey) {
   // Invoking this function does not require a member login for its public IEX
   // research symbols; the server applies guest limits and origin checks.
   const pending = (async () => {
-    const { data, error } = await supabase.functions.invoke('market-data', { body });
+    const { data, error } = await supabase.functions.invoke('market-data', {
+      body,
+      // Supabase's function client does not attach the public key as a bearer
+      // token for signed-out visitors. The Edge Function requires it even
+      // though gateway JWT verification is disabled. Preserve a member's JWT
+      // when present so server-side market permissions still apply.
+      headers: scope.authorizationToken
+        ? { Authorization: `Bearer ${scope.authorizationToken}` }
+        : undefined,
+    });
     if (error) {
       const payload = await readFunctionErrorPayload(error);
       const failure = describeFunctionFailure(error, payload);
@@ -215,7 +231,7 @@ export async function loadSnapshots(supabase, symbols) {
   const results = await Promise.all(batches.map((batch) => requestMarketData(
     supabase,
     { action: 'snapshots', symbols: batch },
-    `snapshots:${scope || 'session-unknown'}:${batch.join(',')}`,
+    `snapshots:${scope.key || 'session-unknown'}:${batch.join(',')}`,
   )));
   const quotes = Object.assign({}, ...results.map((result) => result.quotes || {}));
   const unavailableSymbols = results.flatMap((result) => result.unavailableSymbols || []);

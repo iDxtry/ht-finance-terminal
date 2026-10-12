@@ -16,9 +16,13 @@ function publicMarketClient(response, userId = null) {
   const calls = [];
   return {
     calls,
+    supabaseKey: 'public-project-key',
     auth: {
       async getSession() {
-        return { data: { session: userId ? { user: { id: userId } } : null }, error: null };
+        return {
+          data: { session: userId ? { user: { id: userId }, access_token: `access-${userId}` } : null },
+          error: null,
+        };
       },
     },
     functions: {
@@ -99,6 +103,7 @@ test('signed-out clients can request shared IEX snapshots without a user session
   assert.equal(client.calls.length, 1);
   assert.equal(client.calls[0].name, 'market-data');
   assert.deepEqual(client.calls[0].options.body, { action: 'snapshots', symbols: ['SPY'] });
+  assert.deepEqual(client.calls[0].options.headers, { Authorization: 'Bearer public-project-key' });
 });
 
 test('large guest watchlists are split into guest-safe requests and combined with timestamps', async () => {
@@ -160,6 +165,8 @@ test('member quote cache entries never leak into the signed-out guest cache', as
   assert.equal((await loadSnapshots(guest, ['SPY'])).quotes.SPY.price, 590);
   assert.equal(member.calls.length, 1);
   assert.equal(guest.calls.length, 1);
+  assert.deepEqual(member.calls[0].options.headers, { Authorization: 'Bearer access-member-a' });
+  assert.deepEqual(guest.calls[0].options.headers, { Authorization: 'Bearer public-project-key' });
 });
 
 test('missing public client configuration does not incorrectly require login or per-user keys', async () => {
