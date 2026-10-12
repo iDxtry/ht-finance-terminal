@@ -542,27 +542,46 @@ dialog textarea { resize: vertical; line-height: 1.5; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
 
-.bootstrap-owner, .invite-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #635538; margin: 0 0 12px; background: #191914; padding: 13px 15px; }
-.bootstrap-owner b, .invite-panel h2 { color: #e7e9e6; font-size: 12px; font-weight: 500; }
-.bootstrap-owner p, .invite-panel p { max-width: 620px; margin: 5px 0 0; color: #949fa1; font-size: 9px; line-height: 1.55; }
-.invite-panel { align-items: flex-end; border-color: var(--line); background: #11171b; }
+.invite-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--line); margin: 0 0 12px; background: #11171b; padding: 13px 15px; }
+.invite-panel h2 { color: #e7e9e6; font-size: 12px; font-weight: 500; }
+.invite-panel p { max-width: 620px; margin: 5px 0 0; color: #949fa1; font-size: 9px; line-height: 1.55; }
 .invite-panel>div { max-width: 360px; }
 .invite-panel h2 { margin: 4px 0; }
 .invite-form { display: flex; align-items: flex-end; gap: 8px; }
 .invite-form label, .quant-inputs label, .backtest-inputs label { display: grid; min-width: 125px; gap: 5px; color: #859196; font: 8px var(--mono); letter-spacing: .06em; }
 .invite-form input, .invite-form select, .quant-inputs input, .backtest-inputs input { min-height: 30px; border: 1px solid #303b40; border-radius: 0; padding: 0 8px; color: #e2e7e4; background: #0e1417; font: 10px var(--mono); }
 .invite-form .button { min-height: 30px; }
-.admin-roster, .admin-audit { margin-bottom: 12px; padding-bottom: 4px; }
-.admin-table { min-width: 1380px; }
+.teams-admin-panel, .admin-roster, .admin-audit { margin-bottom: 12px; padding-bottom: 4px; }
+.admin-section-intro { margin: -4px 12px 10px; color: #89969a; font-size: 9px; line-height: 1.55; }
+.team-admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 9px; margin: 0 12px 14px; }
+.team-admin-card { min-width: 0; border: 1px solid #2e393e; background: #101619; padding: 11px; }
+.team-admin-card.is-inactive { opacity: .65; }
+.team-admin-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.team-admin-heading h3, .new-team-form h3 { margin: 4px 0 0; color: #dfe5e2; font-size: 12px; font-weight: 500; }
+.team-admin-description { min-height: 25px; margin: 7px 0 9px; color: #89969a; font-size: 9px; line-height: 1.5; }
+.team-details-form, .team-managers-form { display: grid; gap: 7px; border-top: 1px solid var(--line-soft); padding: 9px 0; }
+.team-details-form label, .team-managers-form label, .new-team-form label { display: grid; min-width: 0; gap: 4px; color: #879397; font: 7px var(--mono); letter-spacing: .06em; }
+.team-details-form input, .team-managers-form select, .new-team-form input, .member-team-form select { min-width: 0; min-height: 27px; border: 1px solid #303b40; border-radius: 0; padding: 3px 6px; color: #bdc6c4; background: #101619; font: 9px var(--sans); }
+.team-managers-form select[multiple] { min-height: 56px; }
+.team-managers-form small { color: #67757a; font: 7px var(--mono); }
+.team-details-form .button, .team-managers-form .button { min-height: 25px; justify-self: start; }
+.team-admin-foot { display: grid; gap: 4px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.team-admin-foot span { color: #77858a; font: 7px var(--mono); letter-spacing: .08em; }
+.team-admin-foot b { color: #b9c3c0; font-size: 9px; font-weight: 400; }
+.new-team-form { display: grid; grid-template-columns: minmax(130px, .65fr) minmax(150px, 1fr) minmax(180px, 1.3fr) minmax(220px, 1.7fr) auto; align-items: end; gap: 8px; border-top: 1px solid var(--line); padding: 12px; }
+.new-team-form h3 { margin: 4px 0 0; }
+.admin-table { min-width: 1280px; }
 .admin-table th:nth-child(4) { min-width: 180px; }
-.admin-table th:nth-child(5) { min-width: 310px; }
+.admin-table th:nth-child(5) { min-width: 210px; }
 .admin-table th:nth-child(6) { min-width: 350px; }
-.portfolio-coverage { display: grid; grid-template-columns: 1fr; gap: 5px; min-width: 270px; }
-.portfolio-coverage label { display: grid; gap: 4px; color: #879397; font: 7px var(--mono); letter-spacing: .06em; }
-.portfolio-coverage select { min-height: 26px; border: 1px solid #303b40; padding: 3px 6px; color: #bdc6c4; background: #101619; font-size: 8px; }
-.portfolio-coverage select[multiple] { min-height: 60px; }
-.portfolio-coverage small { color: #67757a; font: 7px var(--mono); }
-.portfolio-coverage .button { min-height: 25px; justify-self: start; }
+.member-team-form { display: grid; grid-template-columns: minmax(100px,1fr) auto; align-items: center; gap: 5px; min-width: 190px; }
+.member-team-form .button { min-height: 25px; }
+.assigned-member-list { display: grid; }
+.assigned-member-row { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line-soft); padding: 8px 11px; }
+.assigned-member-row>span:nth-child(2) { display: grid; flex: 1; gap: 3px; }
+.assigned-member-row>span:nth-child(2) b { color: #dbe0de; font-size: 9px; font-weight: 500; }
+.assigned-member-row>span:nth-child(2) small { color: #77848a; font-size: 8px; }
+.assigned-member-row .role-tag { font-size: 7px; }
 .assigned-books { margin-bottom: 12px; }
 .trade-filters { display: flex; align-items: flex-end; gap: 8px; border-top: 1px solid var(--line-soft); padding: 9px 12px; }
 .trade-filters label { display: grid; min-width: 115px; gap: 4px; color: #748187; font: 7px var(--mono); letter-spacing: .05em; }
@@ -619,7 +638,9 @@ dialog textarea { resize: vertical; line-height: 1.5; }
   .backtest-inputs .button { flex: 1 1 100%; }
   .invite-form label { flex: 1 1 100%; }
   .invite-form .button { width: 100%; }
-  .bootstrap-owner { align-items: flex-start; flex-direction: column; }
+  .new-team-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .new-team-form>div { grid-column: 1 / -1; }
+  .new-team-form .button { grid-column: 1 / -1; }
 }
 
 .proposal-pricing-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
