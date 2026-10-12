@@ -259,7 +259,7 @@ Deno.serve(async (request) => {
       url.searchParams.set('sort', newestFirst ? 'desc' : 'asc');
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());
-      const maximumBars = limit;
+      const maximumBars = range === '5Y' && timeframe === '1Day' && !isPublicViewer ? 1_500 : limit;
       const rawBars: any[] = [];
       let pageToken: string | null = null;
       for (let page = 0; page < 3 && rawBars.length < maximumBars; page += 1) {
