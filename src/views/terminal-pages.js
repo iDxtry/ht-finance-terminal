@@ -46,7 +46,7 @@ export function renderApplication(state) {
     || 'Guest session';
   const initials = userName.split(/[\s._-]/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || 'G';
   const roleName = state.role === 'visitor' ? 'Research preview' : state.role === 'pending' ? 'Pending activation' : state.role;
-  const marketLabel = state.market.source === 'iex' ? 'Alpaca IEX' : 'Training tape';
+  const marketLabel = state.market.source === 'iex' ? 'Shared Alpaca IEX' : state.market.source === 'training-sim' ? 'Training tape' : 'Market data unavailable';
   const marketClass = state.market.source === 'iex' ? 'feed-live' : 'feed-demo';
 
   return `
@@ -59,7 +59,7 @@ export function renderApplication(state) {
         </a>
         <div class="sidebar-section-title">DESK</div>
         <nav class="nav-list">
-          ${[...NAV, ...(can(state, 'proposals.review') ? [['manager', 'Manager desk', 'MD']] : []), ...(can(state, 'members.read') ? [['members', 'Members', 'MB']] : []), ...(can(state, 'quant.experiments.run') ? [['quant', 'Quant Lab', 'QL']] : []), ...(can(state, 'members.manage') ? [['admin', 'Users & Permissions', 'AD']] : []), ['setup', 'Feed setup', 'ST']].map(([route, label, glyph]) => `
+          ${[...NAV, ...(can(state, 'proposals.review') ? [['manager', 'Manager desk', 'MD']] : []), ...(can(state, 'quant.experiments.run') ? [['quant', 'Quant Lab', 'QL']] : []), ...(can(state, 'members.manage') ? [['admin', 'Teams & access', 'TA']] : [])].map(([route, label, glyph]) => `
             <a class="nav-link ${state.route === route ? 'is-active' : ''}" href="#${route}" aria-current="${state.route === route ? 'page' : 'false'}">
               <span class="nav-code">${glyph}</span><span>${label}</span>${route === 'proposals' && state.pendingCount ? `<i class="nav-count">${state.pendingCount}</i>` : ''}
             </a>`).join('')}
@@ -67,12 +67,11 @@ export function renderApplication(state) {
         <div class="sidebar-bottom">
           <div class="connection-card">
             <div class="connection-title"><span class="feed-dot ${marketClass}"></span><b>${marketLabel}</b></div>
-            <p>${state.market.source === 'iex' ? 'Exchange feed connected' : 'Synthetic values · training only'}</p>
-            <a href="#setup">Configure connection <span>↗</span></a>
+            <p>${state.market.source === 'iex' ? 'Shared IEX-only quotes · US equities' : state.market.source === 'training-sim' ? 'Synthetic values · training only' : 'Guest quotes require the shared service'}</p>
           </div>
           <div class="user-card">
             <span class="avatar">${h(initials)}</span>
-            <span class="user-info"><b>${h(userName)}</b><small>${h(roleName)}</small></span>
+            <span class="user-info"><b>${h(userName)}</b><small>${h(roleName)}${state.teamName ? ` · ${h(state.teamName)}` : ''}</small></span>
             ${state.user ? '<button class="signout-button" type="button" data-action="signout" aria-label="Sign out">↗</button>' : '<button class="signout-button" type="button" data-action="signin" aria-label="Sign in">↗</button>'}
           </div>
         </div>
@@ -95,11 +94,11 @@ export function renderApplication(state) {
         <div class="page-area">
           ${state.notice ? `<div class="notice notice-${h(state.notice.type || 'info')}" role="status"><span>${h(state.notice.message)}</span><button data-action="dismiss-notice" aria-label="Dismiss message">×</button></div>` : ''}
           ${state.loadError ? `<div class="notice notice-error" role="alert"><span>${h(state.loadError)}</span><button data-action="retry-data">Retry</button></div>` : ''}
-          ${state.role === 'pending' && state.user ? '<div class="membership-banner"><b>Account awaiting activation</b><span>You can explore the training tape. A club manager must assign your role before shared proposals and paper ledgers unlock.</span></div>' : ''}
+          ${state.role === 'pending' && state.user ? '<div class="membership-banner"><b>Account awaiting activation</b><span>You can explore the market preview. An Owner must assign your role before club proposals and portfolios unlock.</span></div>' : ''}
           ${content}
         </div>
         <footer class="terminal-footer">
-          <span>HTIG · HTQF / EDUCATIONAL PAPER PORTFOLIO</span>
+          <span>HT FINANCE CLUB / EDUCATIONAL PAPER PORTFOLIOS</span>
           <span>NO BROKER CONNECTION · NO LIVE ORDERS</span>
           <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView Lightweight Charts™ · Copyright (c) 2025 TradingView, Inc. ↗</a>
         </footer>
@@ -117,16 +116,14 @@ function renderPage(state) {
     case 'portfolio': return portfolioPage(state);
     case 'activity': return activityPage(state);
     case 'manager': return managerPage(state);
-    case 'members': return membersPage(state);
     case 'quant': return quantPage(state);
     case 'admin': return adminPage(state);
-    case 'setup': return setupPage(state);
     default: return overviewPage(state);
   }
 }
 
 function pageTitle(route) {
-  return ({ overview: 'Overview', markets: 'Markets', proposals: 'Proposals', portfolio: 'Portfolio', activity: 'Activity', manager: 'Manager desk', members: 'Members', quant: 'Quant Lab', admin: 'Users & Permissions', setup: 'Feed setup' })[route] || 'Overview';
+  return ({ overview: 'Overview', markets: 'Markets', proposals: 'Proposals', portfolio: 'Portfolio', activity: 'Activity', manager: 'Manager desk', quant: 'Quant Lab', admin: 'Teams & access' })[route] || 'Overview';
 }
 
 function renderSearchResults(query) {
@@ -142,7 +139,8 @@ function heading(kicker, title, description, action = '') {
 
 function marketStatus(state) {
   const connected = state.market.source === 'iex';
-  return `<span class="source-label ${connected ? 'source-connected' : 'source-simulated'}"><i></i>${connected ? 'IEX EXCHANGE FEED' : 'TRAINING SIMULATION'}</span>`;
+  const training = state.market.source === 'training-sim';
+  return `<span class="source-label ${connected ? 'source-connected' : training ? 'source-simulated' : 'source-neutral'}"><i></i>${connected ? 'IEX EXCHANGE FEED' : training ? 'TRAINING SIMULATION' : 'NO VERIFIED FEED'}</span>`;
 }
 
 function quoteFor(state, symbol) {
@@ -205,7 +203,7 @@ function overviewPage(state) {
         ${activity.length ? `<div class="ledger-list">${activity.map((trade) => compactTrade(state, trade)).join('')}</div>` : `<div class="table-empty"><b>The execution journal is clear.</b><span>Paper fills appear after a manager approves and records a proposal.</span></div>`}
       </section>
     </div>
-    <div class="data-footnote">${state.market.source === 'iex' ? `ALPACA IEX SNAPSHOT · RECEIVED ${state.market.asOf ? relativeTime(state.market.asOf).toUpperCase() : '—'}` : 'TRAINING TAPE · SYNTHETIC PRICES · NOT MARKET DATA'} <span>Paper equity is marked against the selected price feed. No orders are sent to a broker.</span></div>
+    <div class="data-footnote">${state.market.source === 'iex' ? `SHARED ALPACA IEX SNAPSHOT · RECEIVED ${state.market.asOf ? relativeTime(state.market.asOf).toUpperCase() : '—'}` : state.market.source === 'training-sim' ? 'TRAINING TAPE · SYNTHETIC PRICES · NOT MARKET DATA' : 'MARKET DATA UNAVAILABLE · NO GUEST PRICE SUBSTITUTION'} <span>Paper equity is marked against the selected price feed. No orders are sent to a broker.</span></div>
   `;
 }
 
@@ -239,12 +237,13 @@ function marketsPage(state) {
         <div class="chart-panel-head"><div><div class="eyebrow">PRICE HISTORY / ${h(state.symbol)} / ${h(state.chartRange)}</div><h2>${legend.price ? formatMoney(legend.price) : 'Price chart'} <small id="chart-crosshair-readout">Move crosshair for OHLC</small></h2></div><div class="chart-controls">
           <div class="segmented" aria-label="Chart range">${['1D', '1W', '1M', '3M', '1Y', '5Y'].map((range) => `<button type="button" data-action="chart-range" data-range="${range}" class="${state.chartRange === range ? 'selected' : ''}" aria-pressed="${state.chartRange === range}">${range}</button>`).join('')}</div>
         </div></div>
-        <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><span>${state.market.loadingBars ? 'LOADING BARS…' : `${state.market.bars.length} BARS`} · ${h(state.market.chartSource === 'iex' ? 'IEX' : 'TRAINING SIM')}</span></div>
+        <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><span>${state.market.loadingBars ? 'LOADING BARS…' : `${state.market.bars.length} BARS`} · ${h(state.market.chartSource === 'iex' ? 'IEX' : state.market.chartSource === 'training-sim' ? 'TRAINING SIM' : 'NO DATA')}</span></div>
         <div id="price-chart" class="price-chart" aria-label="Interactive candlestick price chart"></div>
-        <div class="chart-credit"><span>${state.market.chartSource === 'iex' ? 'Source: Alpaca IEX · Exchange coverage is limited to IEX.' : 'Illustrative generated candles · no current market data.'}</span><a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™ ↗</a></div>
+        ${!state.market.loadingBars && !state.market.bars.length && state.market.chartSource === 'unavailable' ? `<div class="market-data-unavailable" role="status"><b>Verified guest history is unavailable.</b><span>${h(state.market.error || 'The shared IEX service did not return chart data.')}</span><button class="text-action" type="button" data-action="retry-data">Retry shared feed</button></div>` : ''}
+        <div class="chart-credit"><span>${state.market.chartSource === 'iex' ? 'Source: Alpaca IEX · Exchange coverage is limited to IEX.' : state.market.chartSource === 'training-sim' ? 'Illustrative generated candles · no current market data.' : 'No chart bars are displayed without verified market data.'}</span><a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™ ↗</a></div>
       </section>
       <aside class="panel quote-details">
-        <div class="panel-heading"><div><div class="eyebrow">SESSION SNAPSHOT</div><h2>Trading range</h2><small class="session-state">${state.market.source === 'iex' && state.market.marketClock ? `US MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'} · NEW YORK` : state.market.source === 'iex' ? 'US MARKET STATUS UNAVAILABLE' : 'NO EXCHANGE SESSION DATA'}</small></div><span class="detail-feed-dot ${state.market.source === 'iex' ? 'feed-live' : 'feed-demo'}"></span></div>
+        <div class="panel-heading"><div><div class="eyebrow">SESSION SNAPSHOT</div><h2>Trading range</h2><small class="session-state">${state.market.source === 'iex' && state.market.marketClock ? `US MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'} · NEW YORK` : state.market.source === 'iex' ? 'US MARKET STATUS UNAVAILABLE' : 'NO VERIFIED SESSION DATA'}</small></div><span class="detail-feed-dot ${state.market.source === 'iex' ? 'feed-live' : 'feed-demo'}"></span></div>
         ${detailRow('Open', quote?.open)}${detailRow('Day high', quote?.high)}${detailRow('Day low', quote?.low)}${detailRow('Prev. close', quote?.previousClose)}${detailRow('Volume', quote?.volume, true)}${detailRow('Bid', quote?.bid)}${detailRow('Ask', quote?.ask)}
         <div class="range-meter"><div class="range-track"><i style="--range-position:${quote && quote.high > quote.low ? `${Math.min(100, Math.max(0, ((quote.price - quote.low) / (quote.high - quote.low)) * 100))}%` : '50%'}"></i></div><div><span>LOW ${quote ? formatMoney(quote.low) : '—'}</span><span>HIGH ${quote ? formatMoney(quote.high) : '—'}</span></div></div>
       </aside>
@@ -254,7 +253,7 @@ function marketsPage(state) {
       <section class="panel movers-panel"><div class="panel-heading"><div><div class="eyebrow">COVERED UNIVERSE</div><h2>Largest moves</h2></div><span class="quiet-count">${movers.length} symbols</span></div>
         ${movers.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Ticker</th><th>Last</th><th>Day change</th></tr></thead><tbody>${movers.map(({symbol,quote:row}) => `<tr><td><button type="button" class="instrument-select" data-action="open-symbol" data-symbol="${h(symbol)}"><b>${h(symbol)}</b><span>${h(instrument(symbol).name)}</span></button></td><td class="numeric">${formatMoney(row.price)}</td><td class="numeric ${classForChange(row.change)}">${formatPercent(row.changePercent)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>Waiting on a snapshot.</b><span>Market changes will populate after the feed connects.</span></div>`}
       </section>
-      <section class="panel market-watch-panel"><div class="panel-heading"><div><div class="eyebrow">PERSONAL COVERAGE / ${state.watchlist.length}</div><h2>Watchlist</h2></div><a href="#setup" class="inline-link">Feed setup ↗</a></div>${watchlistTable(state, {manage:true})}</section>
+      <section class="panel market-watch-panel"><div class="panel-heading"><div><div class="eyebrow">PERSONAL COVERAGE / ${state.watchlist.length}</div><h2>Watchlist</h2></div>${marketStatus(state)}</div>${watchlistTable(state, {manage:true})}</section>
     </div>
   `;
 }
@@ -293,8 +292,8 @@ function proposalCard(state, proposal) {
     ${proposal.reviewed_at ? `<div class="review-meta">${proposal.status === 'executed' ? 'EXECUTED' : 'REVIEWED'} ${h(relativeTime(proposal.reviewed_at))} BY ${h(memberName(state, proposal.reviewed_by))}</div>` : ''}
     ${canReview ? `<form class="review-controls" data-form="proposal-review" data-proposal="${h(proposal.id)}"><label>MANAGER REVIEW COMMENT<textarea name="manager_comment" maxlength="2000" rows="2" placeholder="Key reason, condition, or follow-up for the intern"></textarea></label><div><button class="button approve-button" type="submit" value="approved">Approve thesis</button><button class="button reject-button" type="submit" value="rejected">Reject</button></div></form>` : proposal.manager_comment ? `<div class="review-comment"><small>MANAGER COMMENT</small><p>${h(proposal.manager_comment)}</p></div>` : ''}
     ${(state.proposalReviews || []).filter((review) => review.proposal_id === proposal.id).map((review) => `<div class="review-history"><small>${review.is_override ? 'OWNER OVERRIDE · ' : ''}${h(titleCase(review.decision))} · ${h(memberName(state, review.reviewer_id))} · ${h(formatTime(review.created_at))}</small>${review.comment ? `<p>${h(review.comment)}</p>` : ''}</div>`).join('')}
-    ${(state.quantAnalyses || []).filter((analysis) => analysis.proposal_id === proposal.id).map((analysis) => `<div class="quant-review quant-${h(analysis.recommendation)}"><small>HTQF / ${h(analysis.recommendation)} · ${h(memberName(state, analysis.analyst_id))} · ${h(formatTime(analysis.created_at))}</small><p>${h(analysis.summary)}</p><div>${Object.entries(analysis.metrics || {}).map(([key, value]) => `<span>${h(key.replaceAll('_', ' '))} <b>${h(value)}%</b></span>`).join('')}</div></div>`).join('')}
-    ${can(state, 'quant.research.write') ? `<form class="quant-analysis-form" data-form="quant-analysis" data-proposal="${h(proposal.id)}"><label>HTQF ANALYSIS<select name="recommendation"><option value="support">Support thesis</option><option value="caution">Flag risk</option><option value="oppose">Oppose thesis</option></select></label><label>SUMMARY<textarea name="summary" minlength="20" maxlength="2000" rows="2" placeholder="State the result, assumptions, and limitations" required></textarea></label><div><label>VOLATILITY / %<input name="annual_volatility_pct" type="number" min="0" max="1000" step="0.01"></label><label>MAX DRAWDOWN / %<input name="max_drawdown_pct" type="number" min="0" max="1000" step="0.01"></label><label>95% VaR / %<input name="var_95_pct" type="number" min="0" max="1000" step="0.01"></label></div><button class="button compact" type="submit">Add quantitative finding</button></form>` : ''}
+    ${(state.quantAnalyses || []).filter((analysis) => analysis.proposal_id === proposal.id).map((analysis) => `<div class="quant-review quant-${h(analysis.recommendation)}"><small>QUANT / ${h(analysis.recommendation)} · ${h(memberName(state, analysis.analyst_id))} · ${h(formatTime(analysis.created_at))}</small><p>${h(analysis.summary)}</p><div>${Object.entries(analysis.metrics || {}).map(([key, value]) => `<span>${h(key.replaceAll('_', ' '))} <b>${h(value)}%</b></span>`).join('')}</div></div>`).join('')}
+    ${can(state, 'quant.research.write') ? `<form class="quant-analysis-form" data-form="quant-analysis" data-proposal="${h(proposal.id)}"><label>QUANT ANALYSIS<select name="recommendation"><option value="support">Support thesis</option><option value="caution">Flag risk</option><option value="oppose">Oppose thesis</option></select></label><label>SUMMARY<textarea name="summary" minlength="20" maxlength="2000" rows="2" placeholder="State the result, assumptions, and limitations" required></textarea></label><div><label>VOLATILITY / %<input name="annual_volatility_pct" type="number" min="0" max="1000" step="0.01"></label><label>MAX DRAWDOWN / %<input name="max_drawdown_pct" type="number" min="0" max="1000" step="0.01"></label><label>95% VaR / %<input name="var_95_pct" type="number" min="0" max="1000" step="0.01"></label></div><button class="button compact" type="submit">Add quantitative finding</button></form>` : ''}
     ${canOverride ? `<form class="review-controls owner-override" data-form="proposal-override" data-proposal="${h(proposal.id)}"><label>OWNER OVERRIDE / REPLACE ${h(proposal.status.toUpperCase())} DECISION<textarea name="manager_comment" maxlength="2000" rows="2" placeholder="Explain the reason for changing the prior decision"></textarea></label><div><select name="decision" aria-label="Owner override decision"><option value="approved" ${proposal.status === 'approved' ? 'selected' : ''}>Set approved</option><option value="rejected" ${proposal.status === 'rejected' ? 'selected' : ''}>Set rejected</option></select><button class="button button-accent" type="submit">Override decision</button></div></form>` : ''}
     ${canExecute ? `<form class="fill-entry" data-form="execute" data-proposal="${h(proposal.id)}"><label>MANAGER PAPER FILL / USD<input name="price" type="number" min="0.0001" step="any" required placeholder="Enter the executed simulation price"></label><button class="button button-accent">Record fill ↗</button></form>` : ''}
   </article>`;
@@ -315,7 +314,7 @@ function portfolioPage(state) {
   const accountSelector = canViewAssigned && owners.length > 1
     ? `<label class="history-account-select">HISTORY ACCOUNT<select id="portfolio-history-account">${owners.map((member) => `<option value="${h(member.user_id)}" ${member.user_id === portfolioUserId ? 'selected' : ''}>${h(member.full_name || 'Intern account')}</option>`).join('')}</select></label>`
     : '';
-  const coverageName = state.role === 'owner' ? 'Owner oversight' : state.role === 'manager' ? 'Assigned Manager scope' : state.role === 'quant' ? 'HTQF research scope' : 'Personal book';
+  const coverageName = state.role === 'owner' ? 'Owner oversight' : state.role === 'manager' ? 'Assigned Manager scope' : state.role === 'quant' ? 'Assigned Quant scope' : 'Personal book';
   const books = owners.map((member) => ({
     member,
     portfolio: calculatePortfolio(state.trades, member.user_id, state.market.quotes),
@@ -340,7 +339,7 @@ function portfolioPage(state) {
       ${summaryMetric('Unrealized P/L', formatSignedMoney(totals.unrealizedPnl), `${formatPercent(totals.costBasis ? (totals.unrealizedPnl / totals.costBasis) * 100 : 0)} on cost basis`, classForChange(totals.unrealizedPnl))}
     </div>
     ${portfolioHistoryPanel(state, portfolioUserId, selectedAccountName)}
-    ${canViewAssigned ? `<section class="panel assigned-books"><div class="panel-heading"><div><div class="eyebrow">PORTFOLIO COVERAGE / ${books.length} ACCOUNTS</div><h2>Assigned intern books</h2></div><span class="quiet-count">${h(coverageName)}</span></div>${books.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Intern / account</th><th>Team</th><th>Equity</th><th>Cash</th><th>Market value</th><th>Total P/L</th></tr></thead><tbody>${books.map(({member,portfolio}) => `<tr><td>${h(member.full_name || member.email || 'Club member')}</td><td>${h(member.team || '—')}</td><td class="numeric">${formatMoney(portfolio.equity)}</td><td class="numeric">${formatMoney(portfolio.cash)}</td><td class="numeric">${formatMoney(portfolio.marketValue)}</td><td class="numeric ${classForChange(portfolio.totalPnl)}">${formatSignedMoney(portfolio.totalPnl)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No Intern portfolios are assigned to this view.</b><span>The Owner assigns HTQF teams and Manager coverage in Users & Permissions.</span></div>'}</section>` : ''}
+    ${canViewAssigned ? `<section class="panel assigned-books"><div class="panel-heading"><div><div class="eyebrow">PORTFOLIO COVERAGE / ${books.length} ACCOUNTS</div><h2>Assigned intern books</h2></div><span class="quiet-count">${h(coverageName)}</span></div>${books.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Intern / account</th><th>Team</th><th>Equity</th><th>Cash</th><th>Market value</th><th>Total P/L</th></tr></thead><tbody>${books.map(({member,portfolio}) => `<tr><td>${h(member.full_name || member.email || 'Club member')}</td><td>${h(member.team || '—')}</td><td class="numeric">${formatMoney(portfolio.equity)}</td><td class="numeric">${formatMoney(portfolio.cash)}</td><td class="numeric">${formatMoney(portfolio.marketValue)}</td><td class="numeric ${classForChange(portfolio.totalPnl)}">${formatSignedMoney(portfolio.totalPnl)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No Intern portfolios are assigned to this view.</b><span>The Owner assigns groups and Managers in Teams & access.</span></div>'}</section>` : ''}
     <section class="panel positions-panel"><div class="panel-heading"><div><div class="eyebrow">LONG POSITIONS / AVERAGE COST</div><h2>Holdings</h2></div><span class="quiet-count">${priced} of ${allPositions.length} marked from ${state.market.source === 'iex' ? 'IEX' : 'training data'}</span></div>
       ${allPositions.length ? `<div class="table-frame"><table class="data-table positions-table"><thead><tr>${canViewAssigned ? '<th>Intern</th>' : ''}<th>Security</th><th>Shares</th><th>Avg. cost</th><th>Mark</th><th>Market value</th><th>Unrealized P/L</th></tr></thead><tbody>${allPositions.map((position) => `<tr>${canViewAssigned ? `<td>${h(position.ownerName)}</td>` : ''}<td><button class="instrument-select" type="button" data-action="open-symbol" data-symbol="${h(position.symbol)}"><b>${h(position.symbol)}</b><span>${h(instrument(position.symbol).name)}</span></button></td><td class="numeric">${formatNumber(position.shares, 4)}</td><td class="numeric">${formatMoney(position.averageCost)}</td><td class="numeric">${position.quoteAvailable ? formatMoney(position.mark) : `<span class="at-cost">${formatMoney(position.averageCost)} · cost</span>`}</td><td class="numeric">${formatMoney(position.marketValue)}</td><td class="numeric ${classForChange(position.unrealizedPnl)}">${formatSignedMoney(position.unrealizedPnl)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>${canViewAssigned ? 'No assigned holdings yet.' : 'No holdings yet.'}</b><span>Propose an idea, wait for manager approval, then the manager records the paper fill.</span><a class="text-action" href="#proposals">Open research queue ↗</a></div>`}
     </section>
@@ -463,41 +462,24 @@ function managerPage(state) {
   const pending = state.proposals.filter((proposal) => proposal.status === 'pending');
   const open = state.proposals.filter((proposal) => proposal.status === 'approved');
   const participation = calculateClubActivity(state.trades, (userId) => memberName(state, userId));
+  const assignedMembers = state.portfolioMembers.filter((member) => member.user_id !== state.user?.id);
+  const teamAccessLink = can(state, 'members.manage') ? '<a class="button" href="#admin">Teams & access ↗</a>' : '<a class="button" href="#portfolio">Assigned portfolios ↗</a>';
   const today = new Date();
   const todaysFills = state.trades.filter((trade) => new Date(trade.created_at).toDateString() === today.toDateString()).length;
   return `
-    ${heading('MANAGER CONSOLE / CLUB CONTROL', 'Manager desk<span class="heading-period">.</span>', 'Review intern research, manage membership, and record paper execution after approval.', `<a class="button" href="#members">Open member roster ↗</a>`)}
-    <div class="manager-kpis">${summaryMetric('Pending decisions', String(pending.length).padStart(2, '0'), 'Awaiting manager review', pending.length ? 'is-warning' : '')}${summaryMetric('Approved / unfilled', String(open.length).padStart(2, '0'), 'Ready for manual paper entry', '')}${summaryMetric('Club paper fills', String(state.trades.length).padStart(2, '0'), `${todaysFills} recorded today`, '')}${summaryMetric('Active members', String(state.members.filter((member) => member.role).length).padStart(2, '0'), `${state.members.filter((member) => !member.role).length} pending activation`, '')}</div>
+    ${heading('MANAGER CONSOLE / CLUB CONTROL', 'Manager desk<span class="heading-period">.</span>', 'Review research from your assigned groups, follow member work, and record paper execution after approval.', teamAccessLink)}
+    <div class="manager-kpis">${summaryMetric('Pending decisions', String(pending.length).padStart(2, '0'), 'Awaiting manager review', pending.length ? 'is-warning' : '')}${summaryMetric('Approved / unfilled', String(open.length).padStart(2, '0'), 'Ready for manual paper entry', '')}${summaryMetric('Club paper fills', String(state.trades.length).padStart(2, '0'), `${todaysFills} recorded today`, '')}${summaryMetric('Assigned members', String(assignedMembers.length).padStart(2, '0'), 'Across your team assignments', '')}</div>
     <div class="manager-grid"><section class="panel review-queue"><div class="panel-heading"><div><div class="eyebrow">DECISIONS REQUIRED</div><h2>Pending research</h2></div><span class="quiet-count">${pending.length}</span></div>${pending.length ? `<div class="proposal-list">${pending.map((proposal) => compactProposal(proposal, true)).join('')}</div>` : `<div class="table-empty"><b>No proposals need review.</b><span>New intern submissions will appear here.</span></div>`}</section>
       <section class="panel execution-queue"><div class="panel-heading"><div><div class="eyebrow">APPROVED THESIS / PAPER EXECUTION</div><h2>Ready to record</h2></div><span class="quiet-count">${open.length}</span></div>${open.length ? `<div class="proposal-list">${open.map((proposal) => compactProposal(proposal, true)).join('')}</div>` : `<div class="table-empty"><b>No approved proposals are waiting.</b><span>When you approve an idea, record the simulated fill price in the proposal queue.</span></div>`}</section>
     </div>
     <div class="manager-bottom-grid"><section class="panel manager-recent"><div class="panel-heading"><div><div class="eyebrow">RECENT EXECUTIONS</div><h2>Latest fills</h2></div><a href="#activity" class="inline-link">View full ledger ↗</a></div>${state.trades.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Time</th><th>Symbol</th><th>Intern</th><th>Side</th><th>Quantity</th><th>Fill</th><th>Recorded by</th></tr></thead><tbody>${state.trades.slice(0, 7).map((trade) => `<tr><td>${h(relativeTime(trade.created_at))}</td><td><b>${h(trade.symbol)}</b></td><td>${h(memberName(state, trade.author_id))}</td><td class="side-${h(trade.side)}">${h(trade.side.toUpperCase())}</td><td class="numeric">${formatNumber(trade.quantity, 4)}</td><td class="numeric">${formatMoney(trade.price)}</td><td>${h(memberName(state, trade.executed_by))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No executions recorded.</b><span>Approvals and manual paper entries will be logged here.</span></div>'}</section>
-      <section class="panel member-activity"><div class="panel-heading"><div><div class="eyebrow">MEMBER PARTICIPATION / NOT RETURNS</div><h2>Trading activity</h2></div><a class="inline-link" href="#members">Roster ↗</a></div>${participation.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Member</th><th>Fills</th><th>Buys / sells</th><th>Notional</th></tr></thead><tbody>${participation.slice(0, 8).map((member) => `<tr><td>${h(member.name)}</td><td class="numeric">${member.count}</td><td class="numeric">${member.buys} / ${member.sells}</td><td class="numeric">${formatMoney(member.notional)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No member activity yet.</b><span>Notional tracks recorded trade size only. It is not a return ranking.</span></div>'}<div class="manager-footnote">NOTIONAL IS PAPER FILL SIZE; IT DOES NOT MEASURE PERFORMANCE.</div></section></div>
-  `;
-}
-
-function membersPage(state) {
-  if (!can(state, 'members.read')) return authGate('Member roster is restricted.', 'The roster contains private account details.');
-  const members = state.members;
-  const canManage = can(state, 'members.manage');
-  return `
-    ${heading('MEMBER DIRECTORY / CLUB TEAMS', 'Members<span class="heading-period">.</span>', canManage ? 'Manage member roles in Users & Permissions; changes are checked by Postgres and written to the audit log.' : 'Your club account and currently active members.', `<span class="source-label source-neutral">${members.length} ACTIVE ACCOUNTS</span>`)}
-    ${state.role === 'manager' ? '<section class="panel bootstrap-owner"><div><b>Initialize the club Owner</b><p>One-time setup is limited to the email configured in Supabase Edge Function secrets and is disabled after an Owner exists.</p></div><button class="button button-accent" type="button" data-action="bootstrap-owner">Set up Owner ↗</button></section>' : ''}
-    <section class="panel member-roster"><div class="panel-heading"><div><div class="eyebrow">CLUB ROSTER</div><h2>Active accounts</h2></div><span class="quiet-count">${members.length}</span></div>
-      ${members.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Member</th><th>Access</th><th>Joined</th><th>Role controls</th></tr></thead><tbody>${members.map((member) => {
-        const fullName = member.full_name || member.email?.split('@')[0] || 'New member';
-        const controls = canManage
-          ? `<form class="role-assignment" data-form="member-role" data-user-id="${h(member.user_id)}"><select name="role" aria-label="Role for ${h(fullName)}"><option value="intern" ${member.role === 'intern' ? 'selected' : ''}>Intern</option><option value="manager" ${member.role === 'manager' ? 'selected' : ''}>Manager</option><option value="quant" ${member.role === 'quant' ? 'selected' : ''}>Quant</option><option value="owner" ${member.role === 'owner' ? 'selected' : ''}>Owner</option></select><button class="button compact">Save</button></form>`
-          : '<span class="self-role">Owner controls</span>';
-        return `<tr><td><div class="member-cell"><span class="avatar small-avatar">${h(fullName.slice(0, 1).toUpperCase())}</span><span><b>${h(fullName)}</b><small>${h(member.email || '')}</small></span></div></td><td><span class="role-tag role-${h(member.role || 'pending')}">${h(member.role || 'pending')}</span>${member.team ? `<small class="member-state">${h(member.team)}</small>` : ''}</td><td>${h(member.joined_at ? formatTime(member.joined_at, { dateOnly: true }) : '—')}</td><td>${controls}</td></tr>`;
-      }).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No active users have signed in yet.</b><span>The first Owner can initialize the account after the initial email is configured.</span></div>'}
-    </section>
-    <div class="data-footnote">REMOVING MEMBERS DISABLES ACCESS WHILE PRESERVING THEIR RESEARCH AND PAPER-TRADE HISTORY.</div>
+      <section class="panel member-activity"><div class="panel-heading"><div><div class="eyebrow">ASSIGNED TEAM / INTERN ROSTER</div><h2>Your members</h2></div><span class="quiet-count">${assignedMembers.length}</span></div>${assignedMembers.length ? `<div class="assigned-member-list">${assignedMembers.map((member) => `<div class="assigned-member-row"><span class="avatar small-avatar">${h((member.full_name || member.email || '?').slice(0, 1).toUpperCase())}</span><span><b>${h(member.full_name || member.email || 'Club member')}</b><small>${h(member.team || 'No group assigned')}</small></span><span class="role-tag role-${h(member.role || 'pending')}">${h(member.role || 'member')}</span></div>`).join('')}</div>` : '<div class="table-empty"><b>No members are assigned to your desk yet.</b><span>The Owner assigns Managers to groups in Teams & access.</span></div>'}</section>
+      <section class="panel member-activity"><div class="panel-heading"><div><div class="eyebrow">MEMBER PARTICIPATION / NOT RETURNS</div><h2>Trading activity</h2></div></div>${participation.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Member</th><th>Fills</th><th>Buys / sells</th><th>Notional</th></tr></thead><tbody>${participation.slice(0, 8).map((member) => `<tr><td>${h(member.name)}</td><td class="numeric">${member.count}</td><td class="numeric">${member.buys} / ${member.sells}</td><td class="numeric">${formatMoney(member.notional)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No member activity yet.</b><span>Notional tracks recorded trade size only. It is not a return ranking.</span></div>'}<div class="manager-footnote">NOTIONAL IS PAPER FILL SIZE; IT DOES NOT MEASURE PERFORMANCE.</div></section></div>
   `;
 }
 
 function quantPage(state) {
-  if (!can(state, 'quant.experiments.run')) return authGate('Quant Lab is restricted.', 'HTQF members with experiment access can run models and analyze historical bars.');
+  if (!can(state, 'quant.experiments.run')) return authGate('Quant Lab is restricted.', 'Members granted Quant research access can run models and analyze historical bars.');
   const mark = Number(state.market.quotes.get(state.symbol)?.price || 0);
   const initialPrice = state.quantResults?.parameters?.initialPrice || (mark > 0 ? mark : 100);
   const result = state.quantResults;
@@ -510,7 +492,7 @@ function quantPage(state) {
   const p90 = percentile(0.9);
   const above = sorted.length ? sorted.filter((price) => price > initialPrice).length / sorted.length : null;
   return `
-    ${heading('HTQF / MODEL, SIMULATE, RISK-MANAGE', 'Quant Lab<span class="heading-period">.</span>', 'Educational GBM scenarios, historical strategy tests, and transparent risk metrics. Model paths are scenarios, never forecasts.')}
+    ${heading('QUANT RESEARCH / MODEL, SIMULATE, RISK-MANAGE', 'Quant Lab<span class="heading-period">.</span>', 'Educational GBM scenarios, historical strategy tests, and transparent risk metrics. Model paths are scenarios, never forecasts.')}
     <div class="quant-lab-grid">
       <section class="panel quant-model-panel">
         <div class="panel-heading"><div><div class="eyebrow">GEOMETRIC BROWNIAN MOTION / MONTE CARLO</div><h2>Price-path scenarios</h2></div><span class="source-label ${state.market.source === 'iex' ? 'source-connected' : 'source-simulated'}">${state.market.source === 'iex' ? 'IEX REFERENCE' : 'USER-SET MODEL INPUT'}</span></div>
@@ -565,46 +547,60 @@ function quantMetric(label, value) {
 }
 
 function adminPage(state) {
-  if (!can(state, 'members.manage')) return authGate('Owner access required.', 'Only the Owner can invite members, assign roles, configure per-user permissions, and view the audit log.');
+  if (!can(state, 'members.manage')) return authGate('Owner access required.', 'Only the Owner can manage teams, invite members, assign roles, configure per-user permissions, and view the audit log.');
   const assignable = OWNER_ASSIGNABLE_PERMISSIONS;
+  const teams = state.adminTeams || [];
+  const activeManagers = state.adminMembers.filter((candidate) => candidate.active && candidate.role === 'manager');
+  const teamOptions = (selectedCode = '') => `<option value="">No team assigned</option>${teams.map((team) => `<option value="${h(team.team_code)}" ${selectedCode === team.team_code ? 'selected' : ''} ${team.active === false && selectedCode !== team.team_code ? 'disabled' : ''}>${h(team.team_name || team.team_code)}${team.active === false ? ' · inactive' : ''}</option>`).join('')}`;
+  const teamCards = teams.map((team) => {
+    const teamManagers = Array.isArray(team.manager_ids) ? team.manager_ids : [];
+    const managerNames = teamManagers.map((id) => state.adminMembers.find((member) => member.user_id === id)).filter(Boolean).map((member) => member.full_name || member.email);
+    return `<article class="team-admin-card ${team.active === false ? 'is-inactive' : ''}">
+      <div class="team-admin-heading"><div><div class="eyebrow">${h(team.team_code)}</div><h3>${h(team.team_name || team.team_code)}</h3></div><span class="quiet-count">${Number(team.member_count || 0)} members</span></div>
+      <p class="team-admin-description">${h(team.description || 'No group description yet.')}</p>
+      <form class="team-details-form" data-form="club-team">
+        <input type="hidden" name="team_code" value="${h(team.team_code)}">
+        <label>GROUP NAME<input name="name" value="${h(team.team_name || '')}" maxlength="80" required></label>
+        <label>DESCRIPTION<input name="description" value="${h(team.description || '')}" maxlength="240" placeholder="What this group works on"></label>
+        <button class="button compact" type="submit">Save group</button>
+      </form>
+      <form class="team-managers-form" data-form="team-managers" data-team-code="${h(team.team_code)}">
+        <label>ASSIGNED MANAGERS<select name="manager_user_ids" multiple size="${Math.max(2, Math.min(4, activeManagers.length || 2))}" aria-label="Managers assigned to ${h(team.team_name || team.team_code)}">${activeManagers.map((manager) => `<option value="${h(manager.user_id)}" ${teamManagers.includes(manager.user_id) ? 'selected' : ''}>${h(manager.full_name || manager.email)}</option>`).join('')}</select><small>Hold Ctrl/Cmd to assign multiple managers.</small></label>
+        <button class="button compact" type="submit">Save managers</button>
+      </form>
+      <div class="team-admin-foot"><span>MANAGERS</span><b>${managerNames.length ? h(managerNames.join(' · ')) : 'None assigned'}</b></div>
+    </article>`;
+  }).join('');
   const rosterRows = state.adminMembers.map((member) => {
     const explicit = member.permissions || {};
     const active = member.active;
     const roleForm = `<form class="role-assignment" data-form="member-role" data-user-id="${h(member.user_id)}"><select name="role" aria-label="Role for ${h(member.full_name || member.email)}"><option value="intern" ${member.role === 'intern' ? 'selected' : ''}>Intern</option><option value="manager" ${member.role === 'manager' ? 'selected' : ''}>Manager</option><option value="quant" ${member.role === 'quant' ? 'selected' : ''}>Quant</option><option value="owner" ${member.role === 'owner' ? 'selected' : ''}>Owner</option></select><button class="button compact">Save role</button></form>`;
-    const activeManagers = state.adminMembers.filter((candidate) => candidate.active && candidate.role === 'manager');
-    const teamCode = member.team || (member.role === 'intern' ? 'HTIG' : 'HTQF');
-    const teamOptions = member.role === 'quant'
-      ? '<option value="HTQF" selected>HTQF · Quant Group</option>'
-      : `<option value="HTIG" ${teamCode === 'HTIG' ? 'selected' : ''}>HTIG · Investment Group</option><option value="HTQF" ${teamCode === 'HTQF' ? 'selected' : ''}>HTQF · Quant Group</option>`;
-    const coverage = active && ['intern','quant'].includes(member.role)
-      ? `<form class="portfolio-coverage" data-form="portfolio-coverage" data-user-id="${h(member.user_id)}"><label>TEAM<select name="team_code">${teamOptions}</select></label>${member.role === 'intern' ? `<label>ASSIGNED PORTFOLIO MANAGERS<select name="manager_user_ids" multiple size="${Math.max(2, Math.min(4, activeManagers.length || 2))}" aria-label="Assigned managers for ${h(member.full_name || member.email)}">${activeManagers.map((manager) => `<option value="${h(manager.user_id)}" ${(member.assigned_manager_ids || []).includes(manager.user_id) ? 'selected' : ''}>${h(manager.full_name || manager.email)}</option>`).join('')}</select><small>Use Ctrl/Cmd to select more than one.</small></label>` : '<small>HTQF portfolio research is shared with Quant and Manager roles.</small>'}<button class="button compact">Save team / coverage</button></form>`
-      : active ? '<span class="self-role">Assign a team to Intern or Quant members.</span>' : '<span class="self-role">Activate a role first.</span>';
+    const selectedTeam = member.team_code || member.team || '';
+  const groupForm = active && ['intern', 'quant'].includes(member.role)
+      ? `<form class="member-team-form" data-form="member-team" data-user-id="${h(member.user_id)}"><select name="team_code" aria-label="Team for ${h(member.full_name || member.email)}">${teamOptions(selectedTeam)}</select><button class="button compact">Save group</button></form>`
+      : active && member.role === 'manager' ? '<span class="self-role">Assign Managers from the group card above.</span>'
+        : active ? '<span class="self-role">Only Interns and Quants are assigned to a group.</span>'
+          : '<span class="self-role">Activate a role first.</span>';
     const access = active ? 'ACTIVE' : member.role ? 'REMOVED' : 'INVITED / PENDING';
     const permissionForm = active ? `<form class="permission-assignment" data-form="member-permission" data-user-id="${h(member.user_id)}"><select name="permission_key" aria-label="Permission for ${h(member.email)}">${assignable.map((key) => `<option value="${key}">${h(PERMISSION_LABELS[key])} · ${h(key)}</option>`).join('')}</select><select name="effect" aria-label="Permission setting"><option value="none">Inherit role</option><option value="allow">Allow</option><option value="deny">Deny</option></select><button class="button compact">Save</button></form><div class="permission-badges">${Object.entries(explicit).map(([key, effect]) => `<span class="permission-badge">${h(PERMISSION_LABELS[key] || key)}: ${h(effect)}</span>`).join('') || '<span class="permission-badge inherited">Role defaults only</span>'}</div>` : '<span class="self-role">Activate a role to configure permissions.</span>';
-    return `<tr><td><div class="member-cell"><span class="avatar small-avatar">${h((member.full_name || member.email || '?').slice(0,1).toUpperCase())}</span><span><b>${h(member.full_name || member.email || 'Unknown user')}</b><small>${h(member.email || '')}</small></span></div></td><td><span class="role-tag role-${h(member.role || 'pending')}">${h(member.role || 'pending')}</span><small class="member-state">${access}${member.team ? ` · ${h(member.team)}` : ''}</small></td><td>${h(member.joined_at ? formatTime(member.joined_at, { dateOnly: true }) : '—')}</td><td>${roleForm}${active ? `<button class="text-action remove-member" type="button" data-action="remove-member" data-user-id="${h(member.user_id)}">Remove access</button>` : ''}</td><td>${coverage}</td><td>${permissionForm}</td></tr>`;
+    return `<tr><td><div class="member-cell"><span class="avatar small-avatar">${h((member.full_name || member.email || '?').slice(0,1).toUpperCase())}</span><span><b>${h(member.full_name || member.email || 'Unknown user')}</b><small>${h(member.email || '')}</small></span></div></td><td><span class="role-tag role-${h(member.role || 'pending')}">${h(member.role || 'pending')}</span><small class="member-state">${access}</small></td><td>${h(member.joined_at ? formatTime(member.joined_at, { dateOnly: true }) : '—')}</td><td>${roleForm}${active ? `<button class="text-action remove-member" type="button" data-action="remove-member" data-user-id="${h(member.user_id)}">Remove access</button>` : ''}</td><td>${groupForm}</td><td>${permissionForm}</td></tr>`;
   }).join('');
   const auditRows = state.auditLog.map((event) => `<tr><td>${h(formatTime(event.created_at))}</td><td>${h(event.action)}</td><td>${h(memberName(state, event.actor_id))}</td><td>${h(memberName(state, event.target_user_id))}</td><td><code>${h(JSON.stringify(event.details || {}))}</code></td></tr>`).join('');
   return `
-    ${heading('PLATFORM ADMINISTRATION / OWNER ONLY', 'Users & Permissions<span class="heading-period">.</span>', 'Invite by email, assign club roles, tune delegated capabilities, and review the append-only audit trail.', `<span class="source-label source-neutral">${state.adminMembers.filter((member) => member.active).length} ACTIVE MEMBERS</span>`)}
+    ${heading('PLATFORM ADMINISTRATION / OWNER ONLY', 'Teams & access<span class="heading-period">.</span>', 'Organize working groups, assign their managers, invite members, and control roles and permissions.', `<span class="source-label source-neutral">${state.adminMembers.filter((member) => member.active).length} ACTIVE MEMBERS</span>`)}
+    <section class="panel teams-admin-panel"><div class="panel-heading"><div><div class="eyebrow">WORKING GROUPS</div><h2>Teams and managers</h2></div><span class="quiet-count">${teams.length} groups</span></div>
+      <p class="admin-section-intro">Assign Interns and Quants to a primary group, then add one or more Managers to oversee its Intern portfolios.</p>
+      <div class="team-admin-grid">${teamCards || '<div class="table-empty"><b>No groups have been configured.</b><span>Create one below, then assign members and Managers.</span></div>'}</div>
+      <form class="new-team-form" data-form="club-team"><div><div class="eyebrow">NEW WORKING GROUP</div><h3>Create a group</h3></div><label>GROUP CODE<input name="team_code" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,31}" placeholder="e.g. ENERGY" required></label><label>GROUP NAME<input name="name" maxlength="80" placeholder="Energy research" required></label><label>DESCRIPTION<input name="description" maxlength="500" placeholder="Focus or mandate"></label><button class="button button-accent" type="submit">Create group</button></form>
+    </section>
     <section class="panel invite-panel"><div><div class="eyebrow">MEMBER ACCESS / EMAIL INVITATION</div><h2>Add a club member</h2><p>Invites are sent by Supabase Auth. The role is stored in Postgres and checked on every protected operation.</p></div><form class="invite-form" data-form="owner-invite"><label>EMAIL ADDRESS<input name="email" type="email" autocomplete="email" placeholder="student@school.edu" maxlength="254" required></label><label>ROLE<select name="role"><option value="intern">Intern</option><option value="manager">Manager</option><option value="quant">Quant</option><option value="owner">Owner</option></select></label><button class="button button-accent" type="submit">Invite member</button></form></section>
-    <section class="panel admin-roster"><div class="panel-heading"><div><div class="eyebrow">USERS & PERMISSIONS</div><h2>Club access roster</h2></div><span class="quiet-count">${state.adminMembers.length} accounts</span></div>
-      <div class="table-frame"><table class="data-table admin-table"><thead><tr><th>Member</th><th>Role / state</th><th>Joined</th><th>Role and access</th><th>Team / portfolio coverage</th><th>Per-user permission override</th></tr></thead><tbody>${rosterRows || '<tr><td colspan="6" class="empty-cell">No Auth accounts are registered yet.</td></tr>'}</tbody></table></div>
+    <section class="panel admin-roster"><div class="panel-heading"><div><div class="eyebrow">MEMBER DIRECTORY & ACCESS</div><h2>Member roles and group assignments</h2></div><span class="quiet-count">${state.adminMembers.length} accounts</span></div>
+      <div class="table-frame"><table class="data-table admin-table"><thead><tr><th>Member</th><th>Role / state</th><th>Joined</th><th>Role and access</th><th>Working group</th><th>Per-user permission override</th></tr></thead><tbody>${rosterRows || '<tr><td colspan="6" class="empty-cell">No Auth accounts are registered yet.</td></tr>'}</tbody></table></div>
     </section>
     <section class="panel admin-audit"><div class="panel-heading"><div><div class="eyebrow">APPEND-ONLY / SECURITY EVENTS</div><h2>Audit log</h2></div><span class="quiet-count">LATEST ${state.auditLog.length}</span></div>
       <div class="table-frame"><table class="data-table"><thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Target</th><th>Details</th></tr></thead><tbody>${auditRows || '<tr><td colspan="5" class="empty-cell">No administrative or trade events are recorded yet.</td></tr>'}</tbody></table></div>
     </section>
-    <div class="data-footnote">OWNER-ONLY ROLE CHANGES, OVERRIDES, INVITATIONS, ACCESS REMOVALS, REVIEWS, AND PAPER EXECUTIONS ARE DATABASE-CHECKED AND AUDITED.</div>
-  `;
-}
-
-function setupPage(state) {
-  const connected = state.market.source === 'iex';
-  return `
-    ${heading('CONNECTIONS / MARKET DATA', 'Feed setup<span class="heading-period">.</span>', 'Use the no-cost Alpaca IEX plan for exchange quotes and historical bars. Keys stay server-side in Supabase.', marketStatus(state))}
-    <div class="setup-layout"><section class="panel setup-main"><div class="setup-title"><span class="setup-step">01</span><div><div class="eyebrow">FREE MARKET DATA / EQUITIES</div><h2>${connected ? 'Alpaca IEX is connected' : 'Connect Alpaca IEX'}</h2><p>The free stock-data plan provides real-time prints from IEX only. It is a single exchange feed, not consolidated NYSE/Nasdaq/SIP coverage.</p></div></div>
-      <ol class="setup-steps"><li><span>1</span><div><b>Create a free Alpaca account</b><small>Open the Alpaca dashboard and create paper-trading API keys. Choose the paper environment; this app only reads market data.</small><a href="https://app.alpaca.markets/signup" target="_blank" rel="noopener">Alpaca sign-up ↗</a></div></li><li><span>2</span><div><b>Deploy the market-data function</b><small>Publish <code>supabase/functions/market-data/index.ts</code> to project <code>nftmbvwzeahcnfycdoam</code>. The function verifies the Supabase session and club role before it proxies data.</small><code>npx supabase functions deploy market-data --project-ref nftmbvwzeahcnfycdoam</code></div></li><li><span>3</span><div><b>Add server secrets in Supabase</b><small>Supabase → Edge Functions → Secrets. Add your Alpaca paper API key ID and secret as these names:</small><code>ALPACA_API_KEY_ID<br>ALPACA_API_SECRET_KEY</code></div></li><li><span>4</span><div><b>Refresh the terminal</b><small>Secrets never go into Vite, GitHub, or the browser bundle. Return to Markets and refresh; the status changes to Alpaca IEX when a valid snapshot arrives.</small><button class="text-action" type="button" data-action="retry-data">Test connection ↗</button></div></li></ol>
-    </section><aside class="panel setup-side"><div class="eyebrow">CURRENT FEED STATE</div><h2>${connected ? 'Connected' : 'Training tape active'}</h2><p>${connected ? 'The terminal is receiving Alpaca IEX snapshots. The source timestamp is shown next to each selected security.' : 'A synthetic training model is active so the interface remains usable. It is not live, delayed, or historical market data.'}</p><div class="feed-status-card ${connected ? 'connected' : 'simulated'}"><i></i><div><b>${connected ? 'ALPACA IEX' : 'SYNTHETIC TRAINING'}</b><span>${connected ? `Last response ${state.market.asOf ? relativeTime(state.market.asOf) : 'just now'}` : 'Do not use values for proposal fills'}</span></div></div><div class="data-notes"><b>What the IEX feed means</b><p>Quotes and bars represent the IEX exchange. Trading volume and last price can differ from consolidated US market totals. Club paper fills remain manually entered by a manager.</p><a href="https://docs.alpaca.markets/us/docs/about-market-data-api" target="_blank" rel="noopener">Alpaca market-data plans ↗</a><a href="https://docs.alpaca.markets/us/docs/market-data-faq" target="_blank" rel="noopener">Feed coverage FAQ ↗</a></div></aside></div>
-    <section class="panel integration-note"><div><div class="eyebrow">CHART ENGINE / OPEN SOURCE</div><h2>Interactive candles, rendered in the app</h2><p>The terminal draws candlesticks, volume, crosshair readouts, and moving averages locally with TradingView Lightweight Charts. No chart iframe or hosted widget supplies the interface.</p></div><span class="source-label source-neutral">TradingView Lightweight Charts™</span></section>
+    <div class="data-footnote">TEAM, ROLE, PERMISSION, INVITATION, AND ACCESS CHANGES ARE OWNER-ONLY; THE DATABASE CHECKS AND AUDITS EACH CHANGE.</div>
   `;
 }
 
@@ -629,7 +625,7 @@ function authGate(title, description) {
 }
 
 function memberGate() {
-  return `<section class="panel access-gate"><span class="gate-kicker">PENDING ACTIVATION</span><h2>Your club role is not active yet.</h2><p>Ask the club Owner to assign your account as a Manager, Intern, or Quant. The database withholds shared records until your membership is active.</p><a href="#setup" class="inline-link">Explore data setup ↗</a></section>`;
+  return `<section class="panel access-gate"><span class="gate-kicker">PENDING ACTIVATION</span><h2>Your club role is not active yet.</h2><p>Ask the club Owner to assign your role and working group. The database withholds shared records until your membership is active.</p></section>`;
 }
 
 function renderProposalDialog(state) {
@@ -656,7 +652,7 @@ function renderAuthDialog(state) {
   const title = recovery ? 'Choose a new password' : reset ? 'Reset your password' : signUp ? 'Create your member account' : 'Sign in to the terminal';
   const action = recovery ? 'Update password' : reset ? 'Send reset link' : signUp ? 'Create account' : 'Sign in';
   return `<dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
-    <div class="dialog-top"><div><div class="eyebrow">HTIG · HTQF / MEMBER ACCESS</div><h2 id="auth-title">${h(title)}</h2></div><button class="dialog-close" type="button" data-action="close-auth" aria-label="Close sign in">×</button></div>
+    <div class="dialog-top"><div><div class="eyebrow">HT FINANCE CLUB / MEMBER ACCESS</div><h2 id="auth-title">${h(title)}</h2></div><button class="dialog-close" type="button" data-action="close-auth" aria-label="Close sign in">×</button></div>
     ${!recovery ? `<div class="auth-modes"><button class="${signUp ? '' : 'selected'}" type="button" data-action="auth-mode" data-mode="sign-in">Sign in</button><button class="${signUp ? 'selected' : ''}" type="button" data-action="auth-mode" data-mode="sign-up">Create account</button></div>` : ''}
     <form class="auth-form" data-form="email-auth">
       ${recovery ? `<label>NEW PASSWORD<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>` : `<label>EMAIL ADDRESS<input name="email" type="email" autocomplete="email" maxlength="254" required></label>${reset ? '' : `<label>PASSWORD<input name="password" type="password" autocomplete="${signUp ? 'new-password' : 'current-password'}" minlength="8" required></label>`}`}
