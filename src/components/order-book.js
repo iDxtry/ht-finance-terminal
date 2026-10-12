@@ -11,6 +11,7 @@ export function renderOrderBook(symbol, quote) {
   const book = buildOrderBook(symbol, quote.price, 12);
   const asks = book.asks.slice(0, VISIBLE_LEVELS).reverse();
   const bids = book.bids.slice(0, VISIBLE_LEVELS);
+  const usesIexQuote = quote.feed === 'iex' || quote.source === 'iex';
   const maxTotal = Math.max(book.asks.at(-1)?.total || 1, book.bids.at(-1)?.total || 1);
   const rows = (levels, side) => levels.map((level) => {
     const width = Math.min(100, (level.total / maxTotal) * 100).toFixed(1);
@@ -26,6 +27,6 @@ export function renderOrderBook(symbol, quote) {
     <div class="depth-levels" role="table" aria-label="Generated ask levels">${rows(asks, 'ask')}</div>
     <div class="depth-mid"><span>MODEL MID</span><b>${formatMoney(book.midPrice)}</b><span>SPREAD ${formatMoney(book.spread)}</span></div>
     <div class="depth-levels" role="table" aria-label="Generated bid levels">${rows(bids, 'bid')}</div>
-    <div class="depth-caption">Anchored to displayed ${quote.source === 'iex' ? 'IEX mark' : 'training mark'} ${formatMoney(quote.price)}. The ladder does not represent market liquidity.</div>
+    <div class="depth-caption">Centered on ${usesIexQuote ? 'IEX quote' : 'training price'} ${formatMoney(quote.price)}; illustrative only, not exchange liquidity.</div>
   </section>`;
 }

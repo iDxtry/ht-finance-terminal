@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { renderOrderBook } from '../src/components/order-book.js';
 import { buildOrderBook } from '../src/lib/order-book.js';
 
 test('builds a deterministic ladder with the requested depth', () => {
@@ -32,4 +33,13 @@ test('cumulative depth grows monotonically on each side', () => {
 test('rejects marks that cannot represent a market price', () => {
   assert.throws(() => buildOrderBook('SPY', 0), /positive finite midpoint/);
   assert.throws(() => buildOrderBook('SPY', Number.NaN), /positive finite midpoint/);
+});
+
+test('labels synthetic depth against the actual IEX quote source', () => {
+  const live = renderOrderBook('SPY', { price: 778.1, feed: 'iex' });
+  assert.match(live, /Centered on IEX quote \$778\.10; illustrative only, not exchange liquidity/);
+  assert.doesNotMatch(live, /training price/);
+
+  const training = renderOrderBook('SPY', { price: 469.75, feed: 'training-sim' });
+  assert.match(training, /Centered on training price \$469\.75/);
 });
