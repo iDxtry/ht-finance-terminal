@@ -196,10 +196,23 @@ Deno.serve(async (request) => {
       const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840 };
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());
-      const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
-      if (!upstream.ok) return providerError(upstream, origin);
-      const payload = await upstream.json();
-      const bars = (payload.bars || []).map((bar: any) => ({
+      const maximumBars = range === '5Y' && timeframe === '1Day' ? 1500 : limit;
+      const rawBars: any[] = [];
+      let pageToken: string | null = null;
+      for (let page = 0; page < 3 && rawBars.length < maximumBars; page += 1) {
+        const pageUrl = new URL(url);
+        if (pageToken) pageUrl.searchParams.set('page_token', pageToken);
+        const upstream = await fetch(pageUrl, { headers, signal: AbortSignal.timeout(12_000) });
+        if (!upstream.ok) return providerError(upstream, origin);
+        const payload = await upstream.json();
+        const pageBars = Array.isArray(payload.bars) ? payload.bars : [];
+        rawBars.push(...pageBars);
+        pageToken = typeof payload.next_page_token === 'string' && payload.next_page_token
+          ? payload.next_page_token
+          : null;
+        if (!pageToken || !pageBars.length) break;
+      }
+      const bars = rawBars.slice(0, maximumBars).map((bar: any) => ({
         time: Math.floor(new Date(bar.t).getTime() / 1000),
         open: Number(bar.o),
         high: Number(bar.h),
