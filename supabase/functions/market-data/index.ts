@@ -14,6 +14,7 @@ const allowedOrigins = new Set([
   'http://127.0.0.1:5173',
   'http://localhost:5173',
 ]);
+const maxBodyBytes = 8 * 1024;
 
 // Edge isolates are short-lived, but even a small cache absorbs duplicate chart
 // and watchlist refreshes while users move between terminal workspaces.
@@ -92,7 +93,15 @@ Deno.serve(async (request) => {
 
   let input: Record<string, unknown>;
   try {
-    input = await request.json();
+    const bodyText = await request.text();
+    if (new TextEncoder().encode(bodyText).byteLength > maxBodyBytes) {
+      return response({ ok: false, error: 'Request body is too large.' }, 413, origin);
+    }
+    const parsed: unknown = JSON.parse(bodyText);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return response({ ok: false, error: 'Request body must be a JSON object.' }, 400, origin);
+    }
+    input = parsed as Record<string, unknown>;
   } catch {
     return response({ ok: false, error: 'Request body must be valid JSON.' }, 400, origin);
   }
