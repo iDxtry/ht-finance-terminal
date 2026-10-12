@@ -94,7 +94,7 @@ function hashState() {
   const params = new URLSearchParams(query);
   const route = ROUTES.has(path) ? path : 'overview';
   try {
-    if (params.has('symbol')) state.symbol = cleanSymbol(params.get('symbol'));
+    if (params.has('symbol')) changeSelectedSymbol(cleanSymbol(params.get('symbol')));
   } catch {
     // An invalid link falls back to the last selected symbol.
   }
@@ -113,6 +113,16 @@ function setHash(route, params = {}) {
     return;
   }
   location.hash = next;
+}
+
+function changeSelectedSymbol(symbol) {
+  if (state.symbol === symbol) return;
+  state.symbol = symbol;
+  state.quantResults = null;
+  state.quantBacktest = null;
+  state.quantBars = [];
+  state.quantHistorySymbol = '';
+  state.quantHistorySource = 'Training simulation';
 }
 
 function storageKey(userId) {
@@ -617,6 +627,7 @@ async function loadQuantHistory() {
     try {
       const result = await loadBars(supabase, symbol, '1Y');
       if (!result.bars?.length) throw new Error('No historical bars returned.');
+      if (state.symbol !== symbol || state.quantHistorySymbol !== symbol) return;
       state.quantBars = result.bars;
       state.quantHistorySource = 'Alpaca IEX';
     } catch {
@@ -663,15 +674,18 @@ async function runQuantBacktest(form) {
   if (!Number.isInteger(shortWindow) || !Number.isInteger(longWindow) || shortWindow <= 0 || longWindow <= shortWindow) {
     return setNotice('The slow moving average must be an integer greater than the fast average.', 'error');
   }
+  const symbol = state.symbol;
   await loadQuantHistory();
+  if (state.symbol !== symbol || state.quantHistorySymbol !== symbol) return;
   if (!state.quantBars.length) return setNotice('No bars are available for this backtest.', 'error');
 
   let bars = state.quantBars;
   let benchmarkBars = null;
-  let benchmarkName = `${state.symbol} buy & hold`;
-  if (state.quantHistorySource === 'Alpaca IEX' && state.symbol !== 'SPY' && supabase) {
+  let benchmarkName = `${symbol} buy & hold`;
+  if (state.quantHistorySource === 'Alpaca IEX' && symbol !== 'SPY' && supabase) {
     try {
       const result = await loadBars(supabase, 'SPY', '1Y');
+      if (state.symbol !== symbol || state.quantHistorySymbol !== symbol) return;
       const aligned = alignBenchmarkBars(bars, result.bars || []);
       if (aligned.bars.length >= 2) {
         bars = aligned.bars;
@@ -692,6 +706,7 @@ async function runQuantBacktest(form) {
     });
     state.quantBacktest = {
       ...result,
+      symbol,
       benchmarkName,
       source: state.quantHistorySource,
     };
@@ -711,7 +726,7 @@ function navigateToSymbol(value) {
   }
   state.searchOpen = false;
   state.searchQuery = '';
-  state.symbol = symbol;
+  changeSelectedSymbol(symbol);
   setHash('markets', { symbol, range: state.chartRange });
   void refreshMarketData({ silent: true });
 }
