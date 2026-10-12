@@ -12,7 +12,7 @@ import { isPublicMarketSymbol } from '../supabase/functions/_shared/market-acces
 
 const app = document.querySelector('#app');
 let watchlistSyncTimer = null;
-const ROUTES = new Set(['overview', 'markets', 'proposals', 'portfolio', 'activity', 'manager', 'members', 'quant', 'admin', 'setup']);
+const ROUTES = new Set(['overview', 'markets', 'proposals', 'portfolio', 'activity', 'manager', 'quant', 'admin']);
 const STARTING_SYMBOLS = ['SPY', 'QQQ', 'DIA', 'IWM', 'TLT', 'GLD', 'AAPL', 'NVDA'];
 const RANGE_CONFIG = {
   '1D': { interval: '5Min', count: 78 },
@@ -30,6 +30,8 @@ const state = {
   authMode: 'sign-in',
   authMessage: '',
   permissions: [],
+  teamName: '',
+  teamManagerNames: [],
   route: 'overview',
   symbol: 'SPY',
   chartRange: '1M',
@@ -52,6 +54,7 @@ const state = {
   portfolioHistoryLoading: false,
   portfolioHistoryError: '',
   adminMembers: [],
+  adminTeams: [],
   auditLog: [],
   quantResults: null,
   quantBacktest: null,
@@ -67,8 +70,8 @@ const state = {
   showSma20: false,
   showSma50: false,
   market: {
-    source: 'training-sim',
-    chartSource: 'training-sim',
+    source: 'unavailable',
+    chartSource: 'unavailable',
     quotes: new Map(),
     marketClock: null,
     bars: [],
@@ -327,6 +330,8 @@ async function loadClubData() {
   if (!supabase || !state.user) {
     state.role = 'visitor';
     state.permissions = [];
+    state.teamName = '';
+    state.teamManagerNames = [];
     state.proposals = [];
     state.proposalReviews = [];
     state.quantAnalyses = [];
@@ -334,6 +339,7 @@ async function loadClubData() {
     state.members = [];
     state.portfolioMembers = [];
     state.adminMembers = [];
+    state.adminTeams = [];
     state.auditLog = [];
     state.pendingCount = 0;
     render();
@@ -343,6 +349,8 @@ async function loadClubData() {
   const memberResult = await supabase.from('members').select('role,active').eq('id', state.user.id).maybeSingle();
   if (memberResult.error) {
     state.role = 'pending';
+    state.teamName = '';
+    state.teamManagerNames = [];
     state.proposals = [];
     state.proposalReviews = [];
     state.quantAnalyses = [];
@@ -363,8 +371,11 @@ async function loadClubData() {
     state.members = [];
     state.portfolioMembers = [];
     state.adminMembers = [];
+    state.adminTeams = [];
     state.auditLog = [];
     state.permissions = [];
+    state.teamName = '';
+    state.teamManagerNames = [];
     state.pendingCount = 0;
     render();
     return;
@@ -373,17 +384,29 @@ async function loadClubData() {
   const permissionResult = await supabase.rpc('my_permissions');
   if (permissionResult.error) {
     state.permissions = [];
+    state.teamName = '';
+    state.teamManagerNames = [];
     state.loadError = `Your access permissions could not be verified: ${permissionResult.error.message}`;
     state.proposals = [];
     state.trades = [];
     state.members = [];
     state.portfolioMembers = [];
     state.adminMembers = [];
+    state.adminTeams = [];
     state.auditLog = [];
     render();
     return;
   }
   state.permissions = permissionResult.data || [];
+  const myTeamsResult = await supabase.rpc('my_team_details');
+  if (!myTeamsResult.error) {
+    const teams = myTeamsResult.data || [];
+    state.teamName = [...new Set(teams.map((team) => team.team_name).filter(Boolean))].join(' · ');
+    state.teamManagerNames = [...new Set(teams.flatMap((team) => team.manager_names || []).filter(Boolean))];
+  } else {
+    state.teamName = '';
+    state.teamManagerNames = [];
+  }
   await loadWatchlistPreferences();
 
   const [proposalResult, tradeResult, reviewResult, quantResult] = await Promise.all([
@@ -442,19 +465,22 @@ async function loadClubData() {
     state.portfolioMembers = portfolioMembersResult.data || [];
   }
   if (hasPermission('members.manage')) {
-    const [adminMembersResult, auditResult] = await Promise.all([
+    const [adminMembersResult, adminTeamsResult, auditResult] = await Promise.all([
       supabase.rpc('list_admin_members'),
+      supabase.rpc('list_admin_teams'),
       supabase.from('audit_log').select('*').order('created_at', { ascending: false }).limit(100),
     ]);
     state.adminMembers = adminMembersResult.error ? [] : (adminMembersResult.data || []);
+    state.adminTeams = adminTeamsResult.error ? [] : (adminTeamsResult.data || []);
     state.auditLog = auditResult.error ? [] : (auditResult.data || []);
     if (adminMembersResult.error) state.loadError = `Owner roster could not load: ${adminMembersResult.error.message}`;
+    else if (adminTeamsResult.error) state.loadError = `Club groups could not load: ${adminTeamsResult.error.message}`;
     else if (auditResult.error) state.loadError = `Audit history could not load: ${auditResult.error.message}`;
   } else {
     state.adminMembers = [];
+    state.adminTeams = [];
     state.auditLog = [];
   }
-  if (state.route === 'members' && !hasPermission('members.read')) setHash('overview');
   if (state.route === 'manager' && !hasPermission('proposals.review')) setHash('overview');
   if (state.route === 'admin' && !hasPermission('members.manage')) setHash('overview');
   if (state.route === 'quant' && !hasPermission('quant.experiments.run')) setHash('overview');
@@ -490,8 +516,15 @@ async function refreshMarketData(options = {}) {
   state.market.loading = true;
   const symbols = allMarketSymbols();
   if (!backendConfigured) {
-    setTrainingMarket(symbols);
-    state.market.error = 'Supabase is not configured in this build.';
+    if (state.user) setTrainingMarket(symbols);
+    else {
+      state.market.source = 'unavailable';
+      state.market.quotes = new Map();
+      state.market.asOf = null;
+    }
+    state.market.error = state.user
+      ? 'Supabase is not configured in this build.'
+      : 'Shared IEX market data is unavailable; no simulated guest prices are shown.';
     state.market.loading = false;
     state.market.lastRefreshAt = Date.now();
     marketRequestInFlight = false;
@@ -513,8 +546,15 @@ async function refreshMarketData(options = {}) {
     state.market.asOf = result.receivedAt || new Date().toISOString();
     state.market.error = '';
   } catch (error) {
-    setTrainingMarket(symbols);
+    if (state.user) setTrainingMarket(symbols);
+    else {
+      state.market.source = 'unavailable';
+      state.market.quotes = new Map();
+      state.market.asOf = null;
+      state.market.marketClock = null;
+    }
     state.market.error = error instanceof MarketDataError ? error.message : String(error?.message || error);
+    if (!state.user) state.market.error = `Shared IEX market data is unavailable. ${state.market.error}`;
   }
   state.market.loading = false;
   state.market.lastRefreshAt = Date.now();
@@ -536,7 +576,7 @@ async function loadChartBars(options = {}) {
   state.market.loadingBars = true;
   if (!options.silent && state.route === 'markets') render();
 
-  if (state.market.source === 'iex' && supabase) {
+  if ((state.market.source === 'iex' || !state.user) && supabase) {
     try {
       const result = await loadBars(supabase, symbol, range);
       if (requestNumber !== chartRequestNumber || symbol !== state.symbol || range !== state.chartRange) return;
@@ -545,10 +585,18 @@ async function loadChartBars(options = {}) {
       if (!state.market.bars.length) state.market.error = `No ${range} history returned for ${symbol}.`;
     } catch (error) {
       if (requestNumber !== chartRequestNumber) return;
-      state.market.bars = generateTrainingBars(symbol, config.count, config.interval);
-      state.market.chartSource = 'training-sim';
+      if (state.user) {
+        state.market.bars = generateTrainingBars(symbol, config.count, config.interval);
+        state.market.chartSource = 'training-sim';
+      } else {
+        state.market.bars = [];
+        state.market.chartSource = 'unavailable';
+      }
       state.market.error = error instanceof Error ? error.message : String(error);
     }
+  } else if (state.market.source === 'unavailable' && !state.user) {
+    state.market.bars = [];
+    state.market.chartSource = 'unavailable';
   } else {
     state.market.bars = generateTrainingBars(symbol, config.count, config.interval);
     state.market.chartSource = 'training-sim';
@@ -964,6 +1012,51 @@ async function assignPortfolioCoverage(form) {
   setNotice('Team and portfolio coverage saved.', 'success');
 }
 
+async function saveClubTeam(form) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const values = Object.fromEntries(new FormData(form));
+  const teamCode = String(values.team_code || '').trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9_-]{0,31}$/.test(teamCode)) {
+    return setNotice('Use a group code with 1–32 letters, numbers, hyphens, or underscores.', 'error');
+  }
+  const teamName = String(values.name || '').trim();
+  if (!teamName || teamName.length > 80) return setNotice('Enter a group name up to 80 characters.', 'error');
+  const description = String(values.description || '').trim();
+  if (description.length > 500) return setNotice('Keep the group description under 500 characters.', 'error');
+  const { error } = await supabase.rpc('save_club_team', {
+    p_team_code: teamCode,
+    p_team_name: teamName,
+    p_description: description,
+  });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice(`Group ${teamName} saved.`, 'success');
+}
+
+async function assignMemberTeam(form) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const teamCode = String(new FormData(form).get('team_code') || '').trim().toUpperCase() || null;
+  const { error } = await supabase.rpc('set_member_team', {
+    p_target_user_id: form.dataset.userId,
+    p_team_code: teamCode,
+  });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice(teamCode ? 'Member group assignment saved.' : 'Member removed from their group.', 'success');
+}
+
+async function assignTeamManagers(form) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const managerIds = new FormData(form).getAll('manager_user_ids');
+  const { error } = await supabase.rpc('set_team_managers', {
+    p_team_code: form.dataset.teamCode,
+    p_manager_user_ids: managerIds,
+  });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice('Group Managers and portfolio coverage saved.', 'success');
+}
+
 async function inviteMember(form) {
   if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
   const values = Object.fromEntries(new FormData(form));
@@ -1150,6 +1243,21 @@ function onAppSubmit(event) {
     void assignPortfolioCoverage(form);
     return;
   }
+  if (form.dataset.form === 'club-team') {
+    event.preventDefault();
+    void saveClubTeam(form);
+    return;
+  }
+  if (form.dataset.form === 'member-team') {
+    event.preventDefault();
+    void assignMemberTeam(form);
+    return;
+  }
+  if (form.dataset.form === 'team-managers') {
+    event.preventDefault();
+    void assignTeamManagers(form);
+    return;
+  }
   if (form.dataset.form === 'owner-invite') {
     event.preventDefault();
     void inviteMember(form);
@@ -1200,7 +1308,7 @@ function onGlobalKeydown(event) {
 
 async function initialize() {
   hashState();
-  state.market.quotes = new Map(Object.entries(trainingSnapshots(allMarketSymbols())));
+  state.market.quotes = new Map();
   state.clock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
   render();
   app.addEventListener('click', onAppClick);
@@ -1250,16 +1358,25 @@ async function initialize() {
       clearTimeout(watchlistSyncTimer);
       watchlistSyncTimer = null;
       state.permissions = [];
+      state.teamName = '';
+      state.teamManagerNames = [];
       state.watchlist = loadWatchlist(state.user?.id || null);
       state.market.error = '';
-      state.market.source = 'training-sim';
+      state.market.source = 'unavailable';
+      state.market.chartSource = 'unavailable';
+      state.market.quotes = new Map();
+      state.market.bars = [];
+      state.market.asOf = null;
+      state.market.marketClock = null;
+      state.market.loading = false;
+      state.market.loadingBars = false;
+      chartRequestNumber += 1;
       state.selectedPortfolioUserId = state.user?.id || '';
       state.portfolioHistory = null;
       state.portfolioHistoryUserId = '';
       state.portfolioHistoryLoading = false;
       state.portfolioHistoryError = '';
       portfolioHistoryRequestNumber += 1;
-      setTrainingMarket(allMarketSymbols());
       render();
       void (async () => {
         await loadClubData();
