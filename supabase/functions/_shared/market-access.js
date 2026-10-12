@@ -37,6 +37,11 @@ export function getSupabaseClientKeys(anonKey, publishableKeysValue = '') {
   return keys;
 }
 
+export function selectMarketBars(rawBars, maximumBars, newestFirst = false) {
+  const selected = Array.isArray(rawBars) ? rawBars.slice(0, maximumBars) : [];
+  return newestFirst ? selected.reverse() : selected;
+}
+
 export function createGuestRateLimiter({ maxRequests = GUEST_MARKET_LIMITS.requestsPerMinute, windowMs = 60_000 } = {}) {
   const requests = new Map();
   return (key, now = Date.now()) => {

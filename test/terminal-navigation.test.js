@@ -113,6 +113,7 @@ test('Research is a distinct company workspace linked to Markets charts and club
   assert.match(markets, /id="price-chart"/);
   assert.match(markets, /Largest moves/);
   assert.match(markets, /href="#research\?symbol=SPY"/);
+  assert.doesNotMatch(markets, /SYNTHETIC DEPTH|Generated ask levels|Illustrative market depth/);
   assert.doesNotMatch(markets, /INSTRUMENT PROFILE/);
 });
 

@@ -5,6 +5,7 @@ import {
   GUEST_MARKET_LIMITS,
   isPublicMarketSymbol,
   isPublicSupabaseToken,
+  selectMarketBars,
 } from '../_shared/market-access.js';
 
 const corsHeaders = {
@@ -251,9 +252,11 @@ Deno.serve(async (request) => {
       url.searchParams.set('timeframe', timeframe);
       url.searchParams.set('limit', String(limit));
       url.searchParams.set('feed', 'iex');
-      // Guests are capped to one page of bars; descending upstream order ensures
-      // that a long-range chart receives the most recent bars within that cap.
-      url.searchParams.set('sort', isPublicViewer ? 'desc' : 'asc');
+      // Long ranges are capped at 1,000 bars. Request the newest bars first so
+      // five-year portfolio history reaches the current market period, then
+      // restore chronological order for charts and portfolio calculations.
+      const newestFirst = isPublicViewer || range === '5Y';
+      url.searchParams.set('sort', newestFirst ? 'desc' : 'asc');
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());
       const maximumBars = limit;
@@ -272,8 +275,7 @@ Deno.serve(async (request) => {
           : null;
         if (!pageToken || !pageBars.length) break;
       }
-      const selectedBars = rawBars.slice(0, maximumBars);
-      if (isPublicViewer) selectedBars.reverse();
+      const selectedBars = selectMarketBars(rawBars, maximumBars, newestFirst);
       const bars = selectedBars.map((bar: any) => ({
         time: Math.floor(new Date(bar.t).getTime() / 1000),
         open: Number(bar.o),
