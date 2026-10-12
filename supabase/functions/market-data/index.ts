@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { withSupabase } from 'npm:@supabase/server@1';
 import {
   hashMarketClientKey,
   getSupabaseClientKeys,
@@ -72,7 +73,7 @@ function validSymbol(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Z][A-Z0-9.-]{0,11}$/.test(value);
 }
 
-Deno.serve(async (request) => {
+Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
   const origin = request.headers.get('Origin') || '';
   if (!isAllowedOrigin(origin)) {
     return new Response('Origin not allowed', { status: 403 });
@@ -118,19 +119,8 @@ Deno.serve(async (request) => {
     ? await hashMarketClientKey(request.headers.get('cf-connecting-ip') || 'unknown')
     : null;
   const requestMarketBudget = async (cost: number) => {
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-    if (!serviceRoleKey) {
-      return response({
-        ok: false,
-        code: 'MARKET_BUDGET_UNAVAILABLE',
-        error: 'Shared market-data request protection is unavailable. Try again later.',
-      }, 503, origin);
-    }
     try {
-      const serviceClient = createClient(supabaseUrl, serviceRoleKey, {
-        auth: { autoRefreshToken: false, persistSession: false },
-      });
-      const { data, error } = await serviceClient.rpc('consume_market_request_budget', {
+      const { data, error } = await context.supabaseAdmin.rpc('consume_market_request_budget', {
         p_client_hash: guestClientHash,
         p_is_guest: isPublicViewer,
         p_cost: cost,
@@ -185,7 +175,7 @@ Deno.serve(async (request) => {
       if (!symbols.length || symbols.length > maxSymbols || !symbols.every(validSymbol)) {
         return response({ ok: false, error: `Choose between 1 and ${maxSymbols} valid US stock or ETF symbols.` }, 400, origin);
       }
-      const unavailableSymbols = isPublicViewer ? symbols.filter((symbol) => !isPublicMarketSymbol(symbol)) : [];
+      const unavailableSymbols: string[] = isPublicViewer ? symbols.filter((symbol) => !isPublicMarketSymbol(symbol)) : [];
       const requestedSymbols = isPublicViewer ? symbols.filter(isPublicMarketSymbol) : symbols;
       if (!requestedSymbols.length) {
         return response({
@@ -367,7 +357,7 @@ Deno.serve(async (request) => {
       error: 'The shared Alpaca IEX service is temporarily unavailable. Try again shortly.',
     }, 502, origin);
   }
-});
+}));
 
 async function providerError(upstream: Response, origin: string) {
   const status = upstream.status === 401 || upstream.status === 403 ? 502 : upstream.status;

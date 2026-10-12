@@ -88,6 +88,9 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     const accessMigration = await readFile(new URL('supabase/migrations/202610140001_group_access_and_guest_limits.sql', root), 'utf8');
     await db.exec(accessMigration);
     await db.exec(accessMigration);
+    const apiRolesMigration = await readFile(new URL('supabase/migrations/202610140002_market_budget_new_api_roles.sql', root), 'utf8');
+    await db.exec(apiRolesMigration);
+    await db.exec(apiRolesMigration);
     assert.deepEqual((await db.query(`select portfolio_owner_id,manager_id from public.portfolio_assignments
       where portfolio_owner_id=$1`, [internOther])).rows, [], 'migration removes a legacy cross-group assignment');
     assert.equal((await db.query(`select count(*)::int as count from public.audit_log
@@ -378,7 +381,7 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       `select public.consume_market_request_budget(repeat('a',64),true,1,1,3)`,
     )), /permission denied/);
     await db.exec('set role service_role');
-    await db.query(`select set_config('request.jwt.claim.role','service_role',false)`);
+    await db.query(`select set_config('request.jwt.claim.role','',false)`);
     try {
       assert.equal((await db.query(`select public.consume_market_request_budget(repeat('c',64),true,0,1,3) as allowed`)).rows[0].allowed, true);
       assert.equal((await db.query(`select public.consume_market_request_budget(repeat('c',64),true,0,1,3) as allowed`)).rows[0].allowed, false);

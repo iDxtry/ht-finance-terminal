@@ -102,6 +102,47 @@ test('signed-out market view renders received IEX quotes and keeps the feed labe
   assert.doesNotMatch(html, /Market data unavailable/);
 });
 
+test('signed-out market failures are visible and can be retried from the overview', () => {
+  const state = baseState({ route: 'overview', role: 'visitor', permissions: [] });
+  state.user = null;
+  state.market.error = 'Shared IEX market data is unavailable. Guest limit reached.';
+  state.market.loading = false;
+  const html = renderApplication(state);
+
+  assert.match(html, /class="notice notice-error market-data-notice" role="alert"/);
+  assert.match(html, /Guest limit reached/);
+  assert.match(html, /data-action="retry-data"[^>]*>Refresh prices/);
+  assert.doesNotMatch(html, /TRAINING SIMULATION/);
+});
+
+test('quote panel shows quote observation time separately from response receipt time', () => {
+  const state = baseState({ route: 'markets', role: 'visitor', permissions: [] });
+  state.user = null;
+  state.market = {
+    source: 'iex',
+    quotes: new Map([['SPY', { price: 611.4, change: 1.2, changePercent: 0.197, volume: 1200000, timestamp: '2026-10-12T23:30:00Z' }]]),
+    bars: [],
+    asOf: '2026-10-12T23:31:00Z',
+    marketClock: { isOpen: false },
+    loading: false,
+  };
+  const html = renderApplication(state);
+
+  assert.match(html, /QUOTE Oct 12, 2026 07:30:00 PM ET · RECEIVED .* · MARKET CLOSED/);
+});
+
+test('Quant Lab labels synthetic fallback, shows the history error, and offers a retry', () => {
+  const state = baseState({ route: 'quant', role: 'quant', permissions: ['quant.experiments.run', 'market_data.read'] });
+  state.quantHistorySource = 'Training simulation';
+  state.quantHistoryError = 'Historical IEX bars are unavailable for SPY.';
+  state.quantHistoryLoading = false;
+  const html = renderApplication(state);
+
+  assert.match(html, /Training simulation/);
+  assert.match(html, /Historical IEX bars are unavailable for SPY/);
+  assert.match(html, /data-action="retry-quant-history"[^>]*>Refresh history/);
+});
+
 test('Research is a distinct company workspace linked to Markets charts and club ideas', () => {
   const research = renderApplication(baseState({ route: 'research', role: 'visitor', permissions: [] }));
   const markets = renderApplication(baseState({ route: 'markets', role: 'visitor', permissions: [] }));

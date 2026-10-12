@@ -23,7 +23,7 @@ npm run build
 
 ## Supabase setup
 
-For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply migrations `202610110001_owner_quant_rbac.sql`, `202610120001_flexible_club_teams.sql`, `202610130001_numbered_club_groups.sql`, and `202610140001_group_access_and_guest_limits.sql` in order. Existing club data and the HTIG/HTQF teams are preserved; the migrations seed Group #1–#3, support additional groups, reconcile legacy Manager assignments against current group membership, and keep runtime access group-scoped.
+For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply migrations `202610110001_owner_quant_rbac.sql`, `202610120001_flexible_club_teams.sql`, `202610130001_numbered_club_groups.sql`, `202610140001_group_access_and_guest_limits.sql`, and `202610140002_market_budget_new_api_roles.sql` in order. Existing club data and the HTIG/HTQF teams are preserved; the migrations seed Group #1–#3, support additional groups, reconcile legacy Manager assignments against current group membership, keep runtime access group-scoped, and allow the request budget function to identify Supabase's newer API-key role claims while remaining service-role-only.
 
 Configure Supabase Auth’s Site URL and redirect allow-list for the production host. If using both deployments, allow both:
 

@@ -132,6 +132,8 @@ test('does not carry an old security close forward across a missing market sessi
   assert.deepEqual(missingSession.unpricedSymbols, ['ABC']);
   assert.equal(missingSession.benchmarkEquity, 100_250);
   assert.equal(history.points.find((point) => point.date === '2026-01-06').equity, 100_050);
+  assert.equal(history.metrics.cumulativeReturnPercent, null);
+  assert.ok(Number.isFinite(history.benchmarkMetrics.cumulativeReturnPercent));
 });
 
 test('includes fill-only dates and leaves portfolio and benchmark marks unavailable without same-day bars', () => {
@@ -182,16 +184,20 @@ test('calculates drawdown, annualized volatility, and Sharpe only when return sa
   assert.ok(Number.isFinite(history.benchmarkMetrics.annualizedVolatilityPercent));
 });
 
-test('startDate filters plotted dates, replays earlier trades, and begins benchmark at the requested period', () => {
+test('startDate filters plotted dates and rebases SPY to the account value on the shared comparison start', () => {
   const history = buildPortfolioHistory({
     userId: 'intern-a',
     startDate: '2026-01-05',
     trades: [fill('intern-a', 'ABC', 'buy', 10, 100, '2026-01-02T12:00:00.000Z')],
-    priceBarsBySymbol: { ABC: [bar('2026-01-02', 100), bar('2026-01-05', 120)] },
-    benchmarkBars: [bar('2026-01-02', 400), bar('2026-01-05', 440)],
+    priceBarsBySymbol: { ABC: [bar('2026-01-02', 100), bar('2026-01-05', 120), bar('2026-01-06', 125)] },
+    benchmarkBars: [bar('2026-01-02', 400), bar('2026-01-05', 440), bar('2026-01-06', 484)],
   });
 
-  assert.deepEqual(history.points.map((point) => point.date), ['2026-01-05']);
+  assert.deepEqual(history.points.map((point) => point.date), ['2026-01-05', '2026-01-06']);
   assert.equal(history.points[0].equity, 100_200);
-  assert.equal(history.points[0].benchmarkEquity, 100_000);
+  assert.equal(history.points[0].benchmarkEquity, 100_200);
+  assert.equal(history.portfolioStartingValue, 100_200);
+  assert.equal(history.benchmarkStartingValue, 100_200);
+  assert.ok(Math.abs(history.metrics.cumulativeReturnPercent - ((100_250 / 100_200 - 1) * 100)) < 1e-10);
+  assert.ok(Math.abs(history.benchmarkMetrics.cumulativeReturnPercent - 10) < 1e-10);
 });

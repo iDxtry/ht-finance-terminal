@@ -58,10 +58,9 @@ function normalizeFill(fill, index) {
   return { timestamp, side, symbol, quantity, price, index };
 }
 
-function calculateRiskMetrics(points, equityKey) {
+function calculateRiskMetrics(points, equityKey, startingValue = STARTING_CASH) {
   const measured = points.map((point) => point[equityKey]);
-  const values = measured.filter(Number.isFinite);
-  if (!values.length) {
+  if (!measured.length || measured.some((value) => !Number.isFinite(value))) {
     return {
       cumulativeReturnPercent: null,
       maxDrawdownPercent: null,
@@ -69,8 +68,9 @@ function calculateRiskMetrics(points, equityKey) {
       sharpeRatio: null,
     };
   }
+  const values = measured;
 
-  let peak = STARTING_CASH;
+  let peak = startingValue;
   let maxDrawdown = 0;
   for (const equity of values) {
     peak = Math.max(peak, equity);
@@ -97,7 +97,7 @@ function calculateRiskMetrics(points, equityKey) {
   }
 
   return {
-    cumulativeReturnPercent: ((values.at(-1) / STARTING_CASH) - 1) * 100,
+    cumulativeReturnPercent: ((values.at(-1) / startingValue) - 1) * 100,
     maxDrawdownPercent: maxDrawdown * 100,
     annualizedVolatilityPercent,
     sharpeRatio,
@@ -159,6 +159,9 @@ export function buildPortfolioHistory({
   let cash = STARTING_CASH;
   let realizedPnl = 0;
   let spyShares = null;
+  let portfolioStartingValue = STARTING_CASH;
+  let benchmarkStartingValue = STARTING_CASH;
+  let metricStartIndex = 0;
   const points = [];
 
   for (const day of outputDays) {
@@ -188,10 +191,6 @@ export function buildPortfolioHistory({
     }
 
     const spyClose = spyCloseByDay.get(day);
-    if (spyShares === null && Number.isFinite(spyClose) && (!firstOutputDay || day >= firstOutputDay)) {
-      spyShares = STARTING_CASH / spyClose;
-    }
-
     const activePositions = [...positions.values()].filter((position) => position.shares > SHARE_EPSILON);
     let marketValue = 0;
     const unpricedSymbols = [];
@@ -207,6 +206,13 @@ export function buildPortfolioHistory({
     });
     const fullyPriced = unpricedSymbols.length === 0;
     const equity = fullyPriced ? cash + marketValue : null;
+    if (spyShares === null && Number.isFinite(spyClose) && Number.isFinite(equity)) {
+      const baseline = equity;
+      spyShares = baseline / spyClose;
+      portfolioStartingValue = baseline;
+      benchmarkStartingValue = baseline;
+      metricStartIndex = points.length;
+    }
     // Do not carry an old SPY close forward onto a session with no benchmark
     // bar. A missing date is unknown, not a zero-return observation.
     const benchmarkEquity = spyShares === null || !Number.isFinite(spyClose) ? null : spyShares * spyClose;
@@ -217,23 +223,35 @@ export function buildPortfolioHistory({
       cash,
       marketValue: fullyPriced ? marketValue : null,
       equity,
-      returnPercent: Number.isFinite(equity) ? ((equity / STARTING_CASH) - 1) * 100 : null,
+      returnPercent: null,
       realizedPnl,
       positions: markedPositions,
       unpricedSymbols,
       benchmarkEquity,
-      benchmarkReturnPercent: Number.isFinite(benchmarkEquity)
-        ? ((benchmarkEquity / STARTING_CASH) - 1) * 100
-        : null,
+      benchmarkReturnPercent: null,
     });
   }
+
+  for (const [index, point] of points.entries()) {
+    point.returnPercent = index >= metricStartIndex && Number.isFinite(point.equity)
+      ? ((point.equity / portfolioStartingValue) - 1) * 100
+      : null;
+    point.benchmarkReturnPercent = index >= metricStartIndex && Number.isFinite(point.benchmarkEquity)
+      ? ((point.benchmarkEquity / benchmarkStartingValue) - 1) * 100
+      : null;
+  }
+
+  const metricPoints = points.slice(metricStartIndex);
 
   return {
     userId,
     startingCash: STARTING_CASH,
-    benchmarkStartingValue: STARTING_CASH,
+    comparisonStartDate: points[metricStartIndex]?.date || null,
+    periodStart: firstOutputDay,
+    portfolioStartingValue,
+    benchmarkStartingValue,
     points,
-    metrics: calculateRiskMetrics(points, 'equity'),
-    benchmarkMetrics: calculateRiskMetrics(points, 'benchmarkEquity'),
+    metrics: calculateRiskMetrics(metricPoints, 'equity', portfolioStartingValue),
+    benchmarkMetrics: calculateRiskMetrics(metricPoints, 'benchmarkEquity', benchmarkStartingValue),
   };
 }

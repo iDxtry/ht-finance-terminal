@@ -143,6 +143,25 @@ function marketStatus(state) {
   return `<span class="source-label ${connected ? 'source-connected' : training ? 'source-simulated' : 'source-neutral'}"><i></i>${connected ? 'IEX EXCHANGE FEED' : training ? 'TRAINING SIMULATION' : 'NO VERIFIED FEED'}</span>`;
 }
 
+function marketRefreshButton(state) {
+  return `<button class="button compact" type="button" data-action="retry-data" ${state.market.loading ? 'disabled' : ''}>${state.market.loading ? 'Refreshing…' : 'Refresh prices'}</button>`;
+}
+
+function marketDataNotice(state) {
+  if (!state.market.error) return '';
+  return `<div class="notice notice-error market-data-notice" role="alert"><span>${h(state.market.error)}</span>${marketRefreshButton(state)}</div>`;
+}
+
+function quoteTimestampLabel(state, quote) {
+  if (quote?.timestamp && Number.isFinite(Date.parse(quote.timestamp))) {
+    const updated = state.market.asOf ? ` · RECEIVED ${relativeTime(state.market.asOf).toUpperCase()}` : '';
+    return `QUOTE ${formatTime(quote.timestamp, { dateOnly: true })} ${formatTime(quote.timestamp)} ET${updated}`;
+  }
+  return state.market.asOf
+    ? `QUOTE TIME UNAVAILABLE · RECEIVED ${formatTime(state.market.asOf)} ET`
+    : 'NO EXCHANGE SNAPSHOT';
+}
+
 function quoteFor(state, symbol) {
   return state.market.quotes.get(symbol) || null;
 }
@@ -176,7 +195,8 @@ function overviewPage(state) {
   const portfolioLabel = state.user && state.role !== 'pending' ? formatAvailableMoney(own.equity) : '—';
   const activity = state.trades.slice(0, 5);
   return `
-    ${heading('MARKET INTELLIGENCE / CLUB WORKSPACE', 'Investment desk<span class="heading-period">.</span>', 'A shared research book for intern theses, manager decisions, quantitative findings, and simulated execution.', can(state, 'proposals.create') ? `<button class="button button-accent" type="button" data-action="open-proposal">New thesis <span>＋</span></button>` : '')}
+    ${heading('MARKET INTELLIGENCE / CLUB WORKSPACE', 'Investment desk<span class="heading-period">.</span>', 'A shared research book for intern theses, manager decisions, quantitative findings, and simulated execution.', `<div class="market-heading-actions">${marketRefreshButton(state)}${can(state, 'proposals.create') ? '<button class="button button-accent" type="button" data-action="open-proposal">New thesis <span>＋</span></button>' : ''}</div>`)}
+    ${marketDataNotice(state)}
     <section class="index-strip" aria-label="Market indices">
       ${['SPY', 'QQQ', 'DIA', 'IWM', 'TLT', 'GLD'].map((symbol) => indexTile(state, symbol)).join('')}
       <div class="strip-source">${marketStatus(state)}</div>
@@ -226,10 +246,11 @@ function marketsPage(state) {
     .slice(0, 7);
 
   return `
-    ${heading('MARKET MONITOR / UNITED STATES', 'Markets<span class="heading-period">.</span>', 'Search the covered universe, compare the tape, and study price history.', `<div class="market-heading-actions"><form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form><a class="button" href="#research?symbol=${encodeURIComponent(state.symbol)}">Research ${h(state.symbol)} ↗</a></div>`)}
+    ${heading('MARKET MONITOR / UNITED STATES', 'Markets<span class="heading-period">.</span>', 'Search the covered universe, compare the tape, and study price history.', `<div class="market-heading-actions"><form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form><a class="button" href="#research?symbol=${encodeURIComponent(state.symbol)}">Research ${h(state.symbol)} ↗</a>${marketRefreshButton(state)}</div>`)}
+    ${marketDataNotice(state)}
     <section class="quote-header">
       <div class="quote-identity"><span class="exchange-code">${h(item.exchange)}</span><h2>${h(state.symbol)}</h2><p>${h(item.name)} <i>·</i> ${h(item.sector)}</p></div>
-      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(change)}">${quote ? `${formatSignedMoney(change)} (${formatPercent(quote.changePercent)})` : 'Awaiting feed'}</span><small>${state.market.asOf ? `AS OF ${formatTime(state.market.asOf)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}` : 'NO EXCHANGE SNAPSHOT'}</small></div>
+      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(change)}">${quote ? `${formatSignedMoney(change)} (${formatPercent(quote.changePercent)})` : 'Awaiting feed'}</span><small>${quoteTimestampLabel(state, quote)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}</small></div>
       <div class="quote-actions">${marketStatus(state)}<button class="button ${isWatched ? 'button-muted' : 'button-accent'}" type="button" data-action="toggle-watch" data-symbol="${h(state.symbol)}">${isWatched ? 'Following ✓' : '＋ Follow'}</button>${can(state, 'proposals.create') ? `<button class="button" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">Pitch trade</button>` : ''}</div>
     </section>
     <div class="market-layout">
@@ -239,7 +260,6 @@ function marketsPage(state) {
         </div></div>
         <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><span>${state.market.loadingBars ? 'LOADING BARS…' : `${state.market.bars.length} BARS`} · ${h(state.market.chartSource === 'iex' ? 'IEX' : state.market.chartSource === 'training-sim' ? 'TRAINING SIM' : 'NO DATA')}</span></div>
         <div id="price-chart" class="price-chart" aria-label="Interactive candlestick price chart"></div>
-        ${!state.market.loadingBars && !state.market.bars.length && state.market.chartSource === 'unavailable' ? `<div class="market-data-unavailable" role="status"><b>Verified guest history is unavailable.</b><span>${h(state.market.error || 'The shared IEX service did not return chart data.')}</span><button class="text-action" type="button" data-action="retry-data">Retry shared feed</button></div>` : ''}
         <div class="chart-credit"><span>${state.market.chartSource === 'iex' ? 'Source: Alpaca IEX · Exchange coverage is limited to IEX.' : state.market.chartSource === 'training-sim' ? 'Illustrative generated candles · no current market data.' : 'No chart bars are displayed without verified market data.'}</span><a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™ ↗</a></div>
       </section>
       <aside class="panel quote-details">
@@ -263,7 +283,7 @@ function researchPage(state) {
   const linkedProposals = (state.proposals || []).filter((proposal) => proposal.symbol === state.symbol);
   const linkedProposalIds = new Set(linkedProposals.map((proposal) => proposal.id));
   const analyses = (state.quantAnalyses || []).filter((analysis) => linkedProposalIds.has(analysis.proposal_id));
-  const researchForm = `<form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form>`;
+  const researchForm = `<div class="market-heading-actions"><form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form>${marketRefreshButton(state)}</div>`;
   const proposalRows = linkedProposals.length
     ? linkedProposals.slice(0, 5).map((proposal) => `<article class="research-proposal-row"><div><b>${h(proposal.side.toUpperCase())} ${h(proposal.symbol)}</b><small>${h(memberName(state, proposal.author_id))} · ${h(relativeTime(proposal.created_at))}</small></div><span class="status-tag status-${h(proposal.status)}">${h(proposal.status)}</span><a class="inline-link" href="#proposals">Open ↗</a></article>`).join('')
     : `<div class="table-empty"><b>No club proposals for ${h(state.symbol)}.</b><span>${state.user ? 'Submitted theses linked to this security will appear here.' : 'Sign in to access club research and proposal history.'}</span>${can(state, 'proposals.create') ? `<button class="text-action" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">＋ Propose ${h(state.symbol)}</button>` : ''}</div>`;
@@ -272,9 +292,10 @@ function researchPage(state) {
     : '<div class="research-quant-empty">Quant findings appear here when a Quant member adds analysis to a linked proposal.</div>';
   return `
     ${heading('SECURITY RESEARCH / VERIFIED MARKET SNAPSHOT', 'Research<span class="heading-period">.</span>', 'Company classification, exchange data, club theses, and Quant findings for the selected security.', researchForm)}
+    ${marketDataNotice(state)}
     <section class="quote-header research-quote-header">
       <div class="quote-identity"><span class="exchange-code">${h(item.exchange)}</span><h2>${h(state.symbol)}</h2><p>${h(item.name)} <i>·</i> ${h(item.sector)}</p></div>
-      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(quote?.change ?? 0)}">${quote ? `${formatSignedMoney(quote.change)} (${formatPercent(quote.changePercent)})` : 'Awaiting verified quote'}</span><small>${state.market.asOf ? `AS OF ${formatTime(state.market.asOf)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}` : 'NO EXCHANGE SNAPSHOT'}</small></div>
+      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(quote?.change ?? 0)}">${quote ? `${formatSignedMoney(quote.change)} (${formatPercent(quote.changePercent)})` : 'Awaiting verified quote'}</span><small>${quoteTimestampLabel(state, quote)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}</small></div>
       <div class="quote-actions">${marketStatus(state)}<a class="button" href="#markets?symbol=${encodeURIComponent(state.symbol)}">Open chart & tape ↗</a>${can(state, 'proposals.create') ? `<button class="button button-accent" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">＋ New proposal</button>` : ''}</div>
     </section>
     <div class="research-grid">
@@ -445,9 +466,9 @@ function portfolioHistoryPanel(state, userId, accountName) {
     ${state.portfolioHistoryError ? `<div class="history-warning" role="status">${h(state.portfolioHistoryError)}</div>` : ''}
     ${unpricedSymbols.length ? `<div class="history-warning" role="status">Portfolio equity is omitted on dates without a same-session close for: ${h(unpricedSymbols.join(', '))}.</div>` : ''}
     <div class="history-chart-wrap">${empty || historySvg(history)}</div>
-    <div class="history-legend"><span><i class="equity-swatch"></i>${h(accountName)} equity</span><span><i class="benchmark-swatch"></i>SPY buy &amp; hold · $100,000</span><small>${history?.points.length ? `${history.points[0].date} — ${history.points.at(-1).date} · ${history.points.length} daily marks` : '—'}</small></div>
+    <div class="history-legend"><span><i class="equity-swatch"></i>${h(accountName)} equity</span><span><i class="benchmark-swatch"></i>SPY buy &amp; hold · ${formatMoney(history?.benchmarkStartingValue || 100_000)}</span><small>${history?.points.length ? `${history.points[0].date} — ${history.points.at(-1).date} · ${history.points.length} daily marks` : '—'}</small></div>
     <div class="history-metrics">
-      ${summaryMetric('Cumulative return', totalReturn, 'Against $100,000 starting capital', classForChange(metrics.cumulativeReturnPercent || 0))}
+      ${summaryMetric('Cumulative return', totalReturn, history?.comparisonStartDate ? `Since ${history.comparisonStartDate} · base ${formatMoney(history.portfolioStartingValue)}` : 'Against $100,000 starting capital', classForChange(metrics.cumulativeReturnPercent || 0))}
       ${summaryMetric('Maximum drawdown', drawdown, 'Peak-to-trough decline', 'is-down')}
       ${summaryMetric('Annualized volatility', vol, 'Daily returns · 252 trading days', '')}
       ${summaryMetric('Sharpe ratio', sharpe, 'Zero risk-free rate · daily returns', '')}
@@ -559,8 +580,9 @@ function quantPage(state) {
         <div class="quant-footnote">GBM ASSUMES INDEPENDENT NORMAL SHOCKS, CONSTANT DRIFT AND VOLATILITY, NO FEES, DIVIDENDS, JUMPS, OR STOCHASTIC VOLATILITY.</div>
       </section>
       <section class="panel backtest-panel">
-        <div class="panel-heading"><div><div class="eyebrow">HISTORICAL TEST / NO LOOK-AHEAD SIGNALS</div><h2>SMA crossover</h2></div><span class="source-label ${state.quantHistorySource === 'Alpaca IEX' ? 'source-connected' : 'source-simulated'}">${h(state.quantHistorySource || 'TRAINING DATA')}</span></div>
+        <div class="panel-heading"><div><div class="eyebrow">HISTORICAL TEST / NO LOOK-AHEAD SIGNALS</div><h2>SMA crossover</h2></div><div class="market-heading-actions"><span class="source-label ${state.quantHistorySource === 'Alpaca IEX' ? 'source-connected' : 'source-simulated'}">${h(state.quantHistorySource || 'TRAINING DATA')}</span><button class="button compact" type="button" data-action="retry-quant-history" ${state.quantHistoryLoading ? 'disabled' : ''}>${state.quantHistoryLoading ? 'Loading…' : 'Refresh history'}</button></div></div>
         <p class="quant-intro">A simple long-or-cash moving-average test. A signal uses the previous close and enters at the next session's open. Results are sensitive to the selected period and omit fees, slippage, and dividends.</p>
+        ${state.quantHistoryError ? `<div class="history-warning" role="alert">${h(state.quantHistoryError)}</div>` : ''}
         <form class="backtest-inputs" data-form="quant-backtest">
           <label>FAST SMA<input name="shortWindow" type="number" min="2" max="100" step="1" value="20" required></label>
           <label>SLOW SMA<input name="longWindow" type="number" min="3" max="240" step="1" value="50" required></label>

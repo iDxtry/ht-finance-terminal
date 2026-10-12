@@ -2,6 +2,7 @@ function sortedSymbols(symbols) {
   return [...symbols].sort().join(',');
 }
 
+/** @param {{ symbols: string[], unavailableSymbols?: string[], viewer: string }} options */
 export function marketSnapshotCacheKey({ symbols, unavailableSymbols = [], viewer }) {
   return [
     'snapshots',

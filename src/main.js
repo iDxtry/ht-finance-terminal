@@ -60,6 +60,8 @@ const state = {
   quantResults: null,
   quantBacktest: null,
   quantBars: [],
+  quantHistoryLoading: false,
+  quantHistoryError: '',
   quantHistorySource: 'Training simulation',
   quantHistorySymbol: '',
   pendingCount: 0,
@@ -130,6 +132,8 @@ function changeSelectedSymbol(symbol) {
   state.quantBacktest = null;
   state.quantBars = [];
   state.quantHistorySymbol = '';
+  state.quantHistoryLoading = false;
+  state.quantHistoryError = '';
   state.quantHistorySource = 'Training simulation';
 }
 
@@ -517,6 +521,7 @@ async function refreshMarketData(options = {}) {
   const previousSource = state.market.source;
   marketRequestInFlight = true;
   state.market.loading = true;
+  if (!options.silent) render();
   const symbols = allMarketSymbols();
   if (!backendConfigured) {
     if (state.user) setTrainingMarket(symbols);
@@ -676,12 +681,15 @@ async function loadPortfolioHistory(userId = state.selectedPortfolioUserId || st
   if (state.route === 'portfolio') render();
 }
 
-async function loadQuantHistory() {
+async function loadQuantHistory({ force = false } = {}) {
   const symbol = state.symbol;
-  if (state.quantHistorySymbol === symbol && state.quantBars.length) return;
+  if (!force && state.quantHistorySymbol === symbol && state.quantBars.length) return;
   state.quantHistorySymbol = symbol;
   state.quantHistorySource = 'Training simulation';
   state.quantBars = generateTrainingBars(symbol, 260, '1Day');
+  state.quantHistoryError = '';
+  state.quantHistoryLoading = true;
+  state.quantBacktest = null;
   if (supabase && state.user && hasPermission('market_data.read')) {
     try {
       const result = await loadBars(supabase, symbol, '1Y');
@@ -689,10 +697,12 @@ async function loadQuantHistory() {
       if (state.symbol !== symbol || state.quantHistorySymbol !== symbol) return;
       state.quantBars = result.bars;
       state.quantHistorySource = 'Alpaca IEX';
-    } catch {
-      // Keep the clearly labeled deterministic training series available.
+    } catch (error) {
+      if (state.symbol !== symbol || state.quantHistorySymbol !== symbol) return;
+      state.quantHistoryError = `Historical IEX bars are unavailable for ${symbol}: ${error?.message || 'request failed'}. Training series remains labeled as synthetic.`;
     }
   }
+  state.quantHistoryLoading = false;
   if (state.route === 'quant') render();
 }
 
@@ -1143,6 +1153,7 @@ function onAppClick(event) {
       break;
     case 'toggle-indicator': state[indicator] = !state[indicator]; render(); break;
     case 'retry-data': void refreshMarketData(); break;
+    case 'retry-quant-history': void loadQuantHistory({ force: true }); break;
     case 'export-trades': exportTrades(); break;
     case 'clear-trade-filters': state.tradeSearch = ''; state.tradeFilterSide = 'all'; state.tradeSort = 'newest'; render(); break;
     case 'bootstrap-owner': void bootstrapOwner(); break;
