@@ -13,6 +13,8 @@ const internResearch = '00000000-0000-4000-8000-000000000007';
 const firstProposal = '10000000-0000-4000-8000-000000000001';
 const secondProposal = '10000000-0000-4000-8000-000000000002';
 const researchProposal = '10000000-0000-4000-8000-000000000003';
+const overBudgetProposal = '10000000-0000-4000-8000-000000000004';
+const oversellProposal = '10000000-0000-4000-8000-000000000005';
 
 test('Supabase migration preserves Owner, Manager, Intern, and Quant permission boundaries', async () => {
   const db = new PGlite();
@@ -44,6 +46,19 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     const teamMigration = await readFile(new URL('supabase/migrations/202610120001_flexible_club_teams.sql', root), 'utf8');
     await db.exec(teamMigration);
     await db.exec(teamMigration);
+    const numberedGroupsMigration = await readFile(new URL('supabase/migrations/202610130001_numbered_club_groups.sql', root), 'utf8');
+    await db.exec(numberedGroupsMigration);
+    await db.exec(numberedGroupsMigration);
+
+    async function asUser(userId, work) {
+      await db.exec('set role authenticated');
+      await db.query(`select set_config('request.jwt.claim.sub',$1,false)`, [userId]);
+      try {
+        return await work();
+      } finally {
+        await db.exec('reset role');
+      }
+    }
 
     const users = [owner, manager, internAssigned, internOther, quant, managerSecond, internResearch];
     for (const [index, id] of users.entries()) {
@@ -56,31 +71,50 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       `insert into public.members(id,role) values($1,'owner'),($2,'manager'),($3,'intern'),($4,'intern'),($5,'quant'),($6,'manager'),($7,'intern')`,
       users,
     );
+
+    await asUser(owner, async () => {
+      const { rows } = await db.query(`select team_code,team_name,active,member_count,manager_ids
+        from public.list_admin_teams() where team_code like 'GROUP-%' order by team_code`);
+      assert.deepEqual(rows, [
+        { team_code: 'GROUP-1', team_name: 'Group #1', active: true, member_count: 0, manager_ids: [] },
+        { team_code: 'GROUP-2', team_name: 'Group #2', active: true, member_count: 0, manager_ids: [] },
+        { team_code: 'GROUP-3', team_name: 'Group #3', active: true, member_count: 0, manager_ids: [] },
+      ]);
+      await db.query(`select public.save_club_team('GROUP-4','Group #4','Owner-created group')`);
+      await assert.rejects(db.query(`select public.save_club_team('bad code','Bad','')`), /Group code must be/);
+    });
+
     await db.query(`insert into public.proposals(id,author_id,symbol,side,quantity,thesis,risks) values
       ($1,$4,'AAPL','buy',10,'Long thesis with a durable catalyst and clear upside','Competition could invalidate the thesis'),
       ($2,$5,'MSFT','buy',2,'Long thesis with a durable catalyst and clear upside','Valuation could invalidate the thesis'),
       ($3,$6,'TSLA','buy',4,'Long thesis with a durable catalyst and clear upside','Valuation could invalidate the thesis')`,
     [firstProposal, secondProposal, researchProposal, internAssigned, internOther, internResearch]);
 
-    async function asUser(userId, work) {
-      await db.exec('set role authenticated');
-      await db.query(`select set_config('request.jwt.claim.sub',$1,false)`, [userId]);
-      try {
-        return await work();
-      } finally {
-        await db.exec('reset role');
-      }
-    }
-
-    await asUser(owner, () => db.query(
+    await assert.rejects(asUser(owner, () => db.query(
       `select public.set_portfolio_coverage($1,'HTIG',array[$2]::uuid[])`, [internAssigned, manager],
-    ));
+    )), /assigned to this group/);
+    await asUser(owner, async () => {
+      await db.query(`select public.set_team_managers('HTIG',array[$1]::uuid[])`, [manager]);
+      await db.query(`select public.set_team_managers('HTQF',array[$1]::uuid[])`, [manager]);
+      await db.query(`select public.set_portfolio_coverage($1,'HTIG',array[$2]::uuid[])`, [internAssigned, manager]);
+    });
     await asUser(manager, async () => {
       const { rows } = await db.query('select id from public.proposals order by id');
       assert.deepEqual(rows.map((row) => row.id), [firstProposal]);
       assert.equal((await db.query(`select public.has_permission('proposals.review') as allowed`)).rows[0].allowed, true);
       await db.query(`select public.review_proposal($1,'approved','Reviewed by assigned manager')`, [firstProposal]);
     });
+    await asUser(internAssigned, async () => {
+      const { rows } = await db.query(`select decision,comment,is_override from public.proposal_reviews where proposal_id=$1`, [firstProposal]);
+      assert.deepEqual(rows, [{ decision: 'approved', comment: 'Reviewed by assigned manager', is_override: false }]);
+    });
+    await asUser(internOther, async () => {
+      assert.deepEqual((await db.query(`select proposal_id from public.proposal_reviews`)).rows, []);
+    });
+    await db.query(`insert into public.proposals(id,author_id,symbol,side,quantity,thesis,risks) values
+      ($1,$3,'NVDA','buy',10000,'A large position for a buying-power validation case','The full notional may exceed available cash'),
+      ($2,$3,'TSLA','sell',1,'A sale proposal without an existing position','No shares are held in this symbol')`,
+    [overBudgetProposal, oversellProposal, internAssigned]);
     await assert.rejects(asUser(manager, () => db.query(
       `select public.review_proposal($1,'approved','')`, [secondProposal],
     )), /outside your assigned portfolios/);
@@ -92,9 +126,31 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     )), /at least one active Owner/);
 
     await asUser(manager, () => db.query(`select public.execute_proposal($1,100)`, [firstProposal]));
+    await assert.rejects(asUser(manager, () => db.query(
+      `select public.execute_proposal($1,100)`, [firstProposal],
+    )), /approved, unexecuted proposal is required/);
     await asUser(internAssigned, async () => {
       const { rows } = await db.query('select symbol,quantity,price from public.trades');
       assert.deepEqual(rows, [{ symbol: 'AAPL', quantity: '10', price: '100' }]);
+    });
+    await asUser(owner, async () => {
+      const { rows } = await db.query(`select count(*)::int as fills from public.trades where proposal_id=$1`, [firstProposal]);
+      assert.equal(rows[0].fills, 1);
+      const { rows: auditRows } = await db.query(`select target_user_id,details->>'proposal_id' as proposal_id
+        from public.audit_log where action='paper_trade.executed' and details->>'proposal_id'=$1`, [firstProposal]);
+      assert.deepEqual(auditRows, [{ target_user_id: internAssigned, proposal_id: firstProposal }]);
+    });
+    await asUser(manager, async () => {
+      await db.query(`select public.review_proposal($1,'approved','')`, [overBudgetProposal]);
+      await db.query(`select public.review_proposal($1,'approved','')`, [oversellProposal]);
+      await assert.rejects(db.query(`select public.execute_proposal($1,10)`, [overBudgetProposal]), /does not have enough cash/);
+      await assert.rejects(db.query(`select public.execute_proposal($1,10)`, [oversellProposal]), /does not hold enough shares/);
+      const { rows } = await db.query(`select id,status from public.proposals
+        where id=any(array[$1,$2]::uuid[]) order by id`, [overBudgetProposal, oversellProposal]);
+      assert.deepEqual(rows, [
+        { id: overBudgetProposal, status: 'approved' },
+        { id: oversellProposal, status: 'approved' },
+      ]);
     });
     await asUser(owner, () => db.query(
       `select public.set_portfolio_coverage($1,'HTQF',array[$2]::uuid[])`, [internOther, manager],
@@ -123,20 +179,26 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     });
 
     await asUser(owner, async () => {
-      await db.query(`select public.save_club_team('Q-ALPHA','Quant Alpha','Shared research group')`);
-      await db.query(`select public.set_member_team($1,'Q-ALPHA')`, [internResearch]);
-      await db.query(`select public.set_member_team($1,'Q-ALPHA')`, [quant]);
-      await db.query(`select public.set_team_managers('Q-ALPHA',array[$1,$2]::uuid[])`, [manager, managerSecond]);
-      const { rows } = await db.query(`select * from public.list_admin_teams() where team_code='Q-ALPHA'`);
+      await db.query(`select public.save_club_team('GROUP-1','Group #1','Shared research group')`);
+      await db.query(`select public.set_member_team($1,'GROUP-1')`, [internResearch]);
+      await db.query(`select public.set_member_team($1,'GROUP-1')`, [quant]);
+      await db.query(`select public.set_team_managers('GROUP-1',array[$1,$2]::uuid[])`, [manager, managerSecond]);
+      const { rows } = await db.query(`select * from public.list_admin_teams() where team_code='GROUP-1'`);
       assert.deepEqual(rows, [{
-        team_code: 'Q-ALPHA', team_name: 'Quant Alpha', description: 'Shared research group', active: true,
+        team_code: 'GROUP-1', team_name: 'Group #1', description: 'Shared research group', active: true,
         member_count: 2, manager_ids: [manager, managerSecond],
       }]);
     });
     await asUser(managerSecond, async () => {
       assert.deepEqual((await db.query('select id from public.proposals order by id')).rows, [{ id: researchProposal }]);
       assert.deepEqual((await db.query('select role,team from public.list_visible_portfolios() order by role')).rows, [
-        { role: 'intern', team: 'Q-ALPHA' },
+        { role: 'intern', team: 'GROUP-1' },
+      ]);
+      assert.deepEqual((await db.query(`select team_code,role from public.list_my_team_members() order by role`)).rows, [
+        { team_code: 'GROUP-1', role: 'intern' },
+        { team_code: 'GROUP-1', role: 'manager' },
+        { team_code: 'GROUP-1', role: 'manager' },
+        { team_code: 'GROUP-1', role: 'quant' },
       ]);
       await db.query(`select public.review_proposal($1,'approved','Group review')`, [researchProposal]);
       await db.query(`select public.execute_proposal($1,350)`, [researchProposal]);
@@ -148,15 +210,21 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       `select public.save_club_team('OTHER','Other group','')`,
     )), /Owner access required/);
     await assert.rejects(asUser(manager, () => db.query(
-      `select public.set_member_team($1,'Q-ALPHA')`, [internOther],
+      `select public.set_member_team($1,'GROUP-1')`, [internOther],
     )), /Owner access required/);
 
     await asUser(quant, async () => {
       assert.deepEqual((await db.query('select id from public.proposals')).rows, [{ id: researchProposal }]);
       assert.deepEqual((await db.query('select symbol from public.trades order by symbol')).rows, [{ symbol: 'TSLA' }]);
       assert.deepEqual((await db.query('select role,team from public.list_visible_portfolios() order by role')).rows, [
-        { role: 'intern', team: 'Q-ALPHA' },
-        { role: 'quant', team: 'Q-ALPHA' },
+        { role: 'intern', team: 'GROUP-1' },
+        { role: 'quant', team: 'GROUP-1' },
+      ]);
+      assert.deepEqual((await db.query(`select team_code,role from public.list_my_team_members() order by role`)).rows, [
+        { team_code: 'GROUP-1', role: 'intern' },
+        { team_code: 'GROUP-1', role: 'manager' },
+        { team_code: 'GROUP-1', role: 'manager' },
+        { team_code: 'GROUP-1', role: 'quant' },
       ]);
       const participantIds = (await db.query('select user_id from public.list_proposal_authors()')).rows.map((row) => row.user_id);
       assert.ok(participantIds.includes(internResearch));
@@ -170,10 +238,11 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
         [firstProposal],
       ), /outside your assigned team/);
       assert.deepEqual((await db.query('select team_code,team_name,manager_names from public.my_team_details()')).rows, [{
-        team_code: 'Q-ALPHA', team_name: 'Quant Alpha', manager_names: ['Member 2', 'Member 6'],
+        team_code: 'GROUP-1', team_name: 'Group #1', manager_names: ['Member 2', 'Member 6'],
       }]);
     });
     await assert.rejects(asUser(internAssigned, () => db.query(`select * from public.list_admin_teams()`)), /Owner access required/);
+    await assert.rejects(asUser(internAssigned, () => db.query(`select public.save_club_team('GROUP-5','Group #5','')`)), /Owner access required/);
     await asUser(internAssigned, async () => {
       assert.deepEqual((await db.query(`select * from public.my_team_details()`)).rows, [{
         team_code: 'HTIG', team_name: 'HTIG', manager_names: ['Member 2'],

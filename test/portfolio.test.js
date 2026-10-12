@@ -35,6 +35,38 @@ test('does not include another member’s fills in a personal account', () => {
   assert.equal(book.positions[0].symbol, 'AAPL');
 });
 
+test('an absent or invalid quote never becomes a live mark or complete portfolio valuation', () => {
+  const trades = [
+    { author_id: 'intern-a', symbol: 'ABC', side: 'buy', quantity: 5, price: 20, created_at: '2026-01-01T12:00:00Z' },
+  ];
+
+  for (const quotes of [new Map(), { ABC: { price: 0, last: 'not-a-price' } }]) {
+    const book = calculatePortfolio(trades, 'intern-a', quotes);
+    assert.equal(book.cash, 99_900);
+    assert.equal(book.costBasis, 100);
+    assert.equal(book.positions[0].averageCost, 20);
+    assert.equal(book.positions[0].mark, null);
+    assert.equal(book.positions[0].marketValue, null);
+    assert.equal(book.positions[0].unrealizedPnl, null);
+    assert.equal(book.positions[0].quoteAvailable, false);
+    assert.deepEqual(book.unpricedSymbols, ['ABC']);
+    assert.equal(book.valuationComplete, false);
+    assert.equal(book.marketValue, null);
+    assert.equal(book.equity, null);
+    assert.equal(book.unrealizedPnl, null);
+    assert.equal(book.totalPnl, null);
+    assert.equal(book.returnPercent, null);
+  }
+});
+
+test('reports a cash-only portfolio as fully valued without requiring a quote', () => {
+  const book = calculatePortfolio([], 'intern-a');
+  assert.equal(book.valuationComplete, true);
+  assert.deepEqual(book.unpricedSymbols, []);
+  assert.equal(book.marketValue, 0);
+  assert.equal(book.equity, STARTING_CASH);
+});
+
 test('club activity ranks fill size while keeping buy and sell counts separate', () => {
   const rows = calculateClubActivity([
     { author_id: 'intern-a', side: 'buy', quantity: 5, price: 10 },

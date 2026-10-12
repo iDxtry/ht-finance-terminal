@@ -39,33 +39,46 @@ export function calculatePortfolio(trades, userId, quotes = new Map()) {
     .filter((position) => position.shares > 1e-8)
     .map((position) => {
       const quote = quotes instanceof Map ? quotes.get(position.symbol) : quotes?.[position.symbol];
-      const mark = Number(quote?.price ?? quote?.last ?? position.costBasis / position.shares);
-      const marketValue = position.shares * (Number.isFinite(mark) ? mark : position.costBasis / position.shares);
+      const mark = [quote?.price, quote?.last]
+        .map((value) => Number(value))
+        .find((value) => Number.isFinite(value) && value > 0) ?? null;
+      const quoteAvailable = mark !== null;
+      const marketValue = quoteAvailable ? position.shares * mark : null;
       return {
         ...position,
         averageCost: position.costBasis / position.shares,
-        mark: Number.isFinite(mark) ? mark : null,
+        mark,
+        markSource: quoteAvailable ? 'quote' : null,
         marketValue,
-        unrealizedPnl: marketValue - position.costBasis,
-        changePercent: position.costBasis ? ((marketValue - position.costBasis) / position.costBasis) * 100 : 0,
-        quoteAvailable: Boolean(quote?.price ?? quote?.last),
+        unrealizedPnl: quoteAvailable ? marketValue - position.costBasis : null,
+        changePercent: quoteAvailable && position.costBasis ? ((marketValue - position.costBasis) / position.costBasis) * 100 : null,
+        quoteAvailable,
       };
     })
-    .sort((left, right) => right.marketValue - left.marketValue);
+    .sort((left, right) => {
+      if (left.marketValue === null) return right.marketValue === null ? 0 : 1;
+      if (right.marketValue === null) return -1;
+      return right.marketValue - left.marketValue;
+    });
 
   const costBasis = rows.reduce((sum, position) => sum + position.costBasis, 0);
-  const marketValue = rows.reduce((sum, position) => sum + position.marketValue, 0);
-  const unrealizedPnl = marketValue - costBasis;
+  const unpricedSymbols = rows.filter((position) => !position.quoteAvailable).map((position) => position.symbol);
+  const valuationComplete = unpricedSymbols.length === 0;
+  const marketValue = valuationComplete ? rows.reduce((sum, position) => sum + position.marketValue, 0) : null;
+  const unrealizedPnl = valuationComplete ? marketValue - costBasis : null;
+  const equity = valuationComplete ? cash + marketValue : null;
   return {
     cash,
     positions: rows,
     costBasis,
     marketValue,
-    equity: cash + marketValue,
+    equity,
     realizedPnl,
     unrealizedPnl,
-    totalPnl: realizedPnl + unrealizedPnl,
-    returnPercent: ((cash + marketValue - STARTING_CASH) / STARTING_CASH) * 100,
+    totalPnl: valuationComplete ? realizedPnl + unrealizedPnl : null,
+    returnPercent: valuationComplete ? ((equity - STARTING_CASH) / STARTING_CASH) * 100 : null,
+    valuationComplete,
+    unpricedSymbols,
     ledgerCount: ledger.length,
   };
 }

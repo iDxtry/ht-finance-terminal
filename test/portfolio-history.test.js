@@ -65,7 +65,7 @@ test('includes only this account and fills through each daily end timestamp', ()
     benchmarkBars: [bar('2026-01-02', 400), bar('2026-01-05', 410)],
   });
 
-  assert.equal(history.points.length, 2);
+  assert.equal(history.points.length, 3);
   assert.equal(history.points[0].positions[0].shares, 10);
   assert.equal(history.points[0].cash, 99_500);
   assert.equal(history.points[0].equity, 100_050);
@@ -73,9 +73,12 @@ test('includes only this account and fills through each daily end timestamp', ()
   assert.equal(history.points[1].cash, 99_380);
   assert.equal(history.points[1].equity, 100_160);
   assert.equal(history.points[1].positions[0].close, 65);
+  assert.equal(history.points[2].date, '2026-01-06');
+  assert.equal(history.points[2].positions[0].shares, 112);
+  assert.equal(history.points[2].equity, null);
 });
 
-test('replays partial and excess sells with the app share-balance model and carries the last close forward', () => {
+test('replays partial and excess sells with the app share-balance model after positions close', () => {
   const history = buildPortfolioHistory({
     userId: 'intern-a',
     trades: [
@@ -113,6 +116,50 @@ test('does not invent a market value when a held symbol has no prior daily close
   assert.deepEqual(history.points[0].unpricedSymbols, ['NEW']);
   assert.equal(history.points[1].positions[0].close, 22);
   assert.equal(history.points[1].equity, 100_010);
+});
+
+test('does not carry an old security close forward across a missing market session', () => {
+  const history = buildPortfolioHistory({
+    userId: 'intern-a',
+    trades: [fill('intern-a', 'ABC', 'buy', 10, 100, '2026-01-02T12:00:00.000Z')],
+    priceBarsBySymbol: { ABC: [bar('2026-01-02', 100), bar('2026-01-06', 105)] },
+    benchmarkBars: [bar('2026-01-02', 400), bar('2026-01-05', 401), bar('2026-01-06', 402)],
+  });
+
+  const missingSession = history.points.find((point) => point.date === '2026-01-05');
+  assert.equal(missingSession.equity, null);
+  assert.equal(missingSession.marketValue, null);
+  assert.deepEqual(missingSession.unpricedSymbols, ['ABC']);
+  assert.equal(missingSession.benchmarkEquity, 100_250);
+  assert.equal(history.points.find((point) => point.date === '2026-01-06').equity, 100_050);
+});
+
+test('includes fill-only dates and leaves portfolio and benchmark marks unavailable without same-day bars', () => {
+  const history = buildPortfolioHistory({
+    userId: 'intern-a',
+    trades: [fill('intern-a', 'ABC', 'buy', 2, 50, '2026-01-05T12:00:00.000Z')],
+    priceBarsBySymbol: { ABC: [bar('2026-01-02', 50), bar('2026-01-06', 51)] },
+    benchmarkBars: [bar('2026-01-02', 400), bar('2026-01-06', 404)],
+  });
+
+  const fillDay = history.points.find((point) => point.date === '2026-01-05');
+  assert.ok(fillDay);
+  assert.equal(fillDay.equity, null);
+  assert.deepEqual(fillDay.unpricedSymbols, ['ABC']);
+  assert.equal(fillDay.benchmarkEquity, null);
+  assert.equal(history.points.at(-1).equity, 100_002);
+});
+
+test('deduplicates same-session bars so a duplicate cannot create a second return observation', () => {
+  const history = buildPortfolioHistory({
+    userId: 'intern-a',
+    trades: [],
+    benchmarkBars: [bar('2026-01-02', 400), bar('2026-01-02', 410), bar('2026-01-05', 410)],
+  });
+
+  assert.equal(history.points.length, 2);
+  assert.equal(history.points[0].benchmarkEquity, 100_000);
+  assert.equal(history.points[1].benchmarkEquity, 100_000);
 });
 
 test('calculates drawdown, annualized volatility, and Sharpe only when return samples support them', () => {

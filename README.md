@@ -23,7 +23,7 @@ npm run build
 
 ## Supabase setup
 
-For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply `supabase/migrations/202610110001_owner_quant_rbac.sql` followed by `supabase/migrations/202610120001_flexible_club_teams.sql`. Existing club data and the HTIG/HTQF teams are preserved; the second migration adds Owner-managed groups with multiple assigned Managers and group-scoped Intern/Quant access.
+For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply `supabase/migrations/202610110001_owner_quant_rbac.sql`, `supabase/migrations/202610120001_flexible_club_teams.sql`, and `supabase/migrations/202610130001_numbered_club_groups.sql` in order. Existing club data and the HTIG/HTQF teams are preserved; the later migrations add Owner-managed groups, seed empty Group #1–#3 workspaces, support additional groups, and keep Manager/Quant access scoped to assigned groups.
 
 Configure Supabase Auth’s Site URL and redirect allow-list for the production host. If using both deployments, allow both:
 

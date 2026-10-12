@@ -24,7 +24,7 @@ function publicMarketClient(response, userId = null) {
     functions: {
       async invoke(name, options) {
         calls.push({ name, options });
-        return response;
+        return typeof response === 'function' ? response(options) : response;
       },
     },
   };
@@ -101,6 +101,45 @@ test('signed-out clients can request shared IEX snapshots without a user session
   assert.deepEqual(client.calls[0].options.body, { action: 'snapshots', symbols: ['SPY'] });
 });
 
+test('large guest watchlists are split into guest-safe requests and combined with timestamps', async () => {
+  clearMarketCache();
+  const timestamp = '2026-10-12T15:00:00Z';
+  const receivedAt = '2026-10-12T15:00:01Z';
+  const client = publicMarketClient(({ body }) => ({
+    error: null,
+    data: {
+      ok: true,
+      feed: 'iex',
+      quotes: Object.fromEntries(body.symbols.map((symbol) => [symbol, {
+        symbol,
+        price: 100,
+        change: 1,
+        changePercent: 1,
+        open: 99,
+        high: 101,
+        low: 98,
+        previousClose: 99,
+        volume: 1000,
+        bid: 99.9,
+        ask: 100.1,
+        timestamp,
+        feed: 'iex',
+      }])),
+      unavailableSymbols: [],
+      marketClock: { isOpen: true, timestamp: receivedAt, timeZone: 'America/New_York' },
+      receivedAt,
+    },
+  }));
+
+  const symbols = INSTRUMENTS.map(([symbol]) => symbol).slice(0, 40);
+  const result = await loadSnapshots(client, symbols);
+  assert.equal(client.calls.length, Math.ceil(symbols.length / GUEST_MARKET_LIMITS.snapshotSymbols));
+  assert.ok(client.calls.every(({ options }) => options.body.symbols.length <= GUEST_MARKET_LIMITS.snapshotSymbols));
+  assert.equal(Object.keys(result.quotes).length, symbols.length);
+  assert.equal(result.receivedAt, receivedAt);
+  assert.equal(result.feed, 'iex');
+});
+
 test('member quote cache entries never leak into the signed-out guest cache', async () => {
   clearMarketCache();
   const quote = (price) => ({
@@ -110,11 +149,11 @@ test('member quote cache entries never leak into the signed-out guest cache', as
   });
   const member = publicMarketClient({
     error: null,
-    data: { ok: true, feed: 'iex', quotes: { SPY: quote(600) } },
+    data: { ok: true, feed: 'iex', quotes: { SPY: quote(600) }, receivedAt: '2026-10-12T15:00:01Z' },
   }, 'member-a');
   const guest = publicMarketClient({
     error: null,
-    data: { ok: true, feed: 'iex', quotes: { SPY: quote(590) } },
+    data: { ok: true, feed: 'iex', quotes: { SPY: quote(590) }, receivedAt: '2026-10-12T15:00:01Z' },
   });
 
   assert.equal((await loadSnapshots(member, ['SPY'])).quotes.SPY.price, 600);
@@ -145,7 +184,7 @@ test('market service rejects synthetic or malformed responses instead of caching
   clearMarketCache();
   const zeroQuoteClient = publicMarketClient({
     error: null,
-    data: { ok: true, feed: 'iex', quotes: { SPY: { symbol: 'SPY', price: 0, feed: 'iex' } } },
+    data: { ok: true, feed: 'iex', quotes: { SPY: { symbol: 'SPY', price: 0, feed: 'iex', timestamp: '2026-10-12T15:00:00Z' } }, receivedAt: '2026-10-12T15:00:01Z' },
   });
   await assert.rejects(loadSnapshots(zeroQuoteClient, ['SPY']), { code: 'INVALID_RESPONSE' });
 
@@ -156,9 +195,30 @@ test('market service rejects synthetic or malformed responses instead of caching
       ok: true,
       feed: 'iex',
       bars: [{ time: 1_800_000_000, open: 10, high: 9, low: 8, close: 8.5, volume: 1 }],
+      receivedAt: '2026-10-12T15:00:01Z',
     },
   });
   await assert.rejects(loadBars(malformedClient, 'SPY', '1M'), { code: 'INVALID_RESPONSE' });
+});
+
+test('rate-limit errors expose a retry delay without leaking provider setup details', async () => {
+  clearMarketCache();
+  const client = publicMarketClient({
+    data: null,
+    error: Object.assign(new Error('Edge Function returned a non-2xx status code'), {
+      context: new Response(JSON.stringify({
+        ok: false,
+        code: 'RATE_LIMITED',
+        error: 'Guest market-data limit reached.',
+      }), { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '60' } }),
+    }),
+  });
+  await assert.rejects(loadSnapshots(client, ['SPY']), (error) => {
+    assert.equal(error.code, 'RATE_LIMITED');
+    assert.equal(error.retryAfterSeconds, 60);
+    assert.match(error.message, /wait a minute/i);
+    return true;
+  });
 });
 
 test('shared feed configuration errors are explained as an admin-side connection', async () => {

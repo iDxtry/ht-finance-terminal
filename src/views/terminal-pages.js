@@ -1,4 +1,4 @@
-import { calculateClubActivity, calculatePortfolio } from '../lib/portfolio.js';
+import { calculatePortfolio } from '../lib/portfolio.js';
 import { classForChange, escapeHtml as h, formatCompact, formatMoney, formatNumber, formatPercent, formatSignedMoney, formatTime, relativeTime } from '../lib/format.js';
 import { DEFAULT_WATCHLIST, findInstruments, instrument, INSTRUMENTS } from '../data/universe.js';
 import { chartLegend } from '../components/price-chart.js';
@@ -33,8 +33,9 @@ function can(state, permission) {
 const NAV = [
   ['overview', 'Overview', 'OV'],
   ['markets', 'Markets', 'MK'],
+  ['research', 'Research', 'RS'],
   ['proposals', 'Proposals', 'PR'],
-  ['portfolio', 'Portfolio', 'PF'],
+  ['portfolio', 'Portfolios', 'PF'],
   ['activity', 'Activity', 'AC'],
 ];
 
@@ -59,7 +60,7 @@ export function renderApplication(state) {
         </a>
         <div class="sidebar-section-title">DESK</div>
         <nav class="nav-list">
-          ${[...NAV, ...(can(state, 'proposals.review') ? [['manager', 'Manager desk', 'MD']] : []), ...(can(state, 'quant.experiments.run') ? [['quant', 'Quant Lab', 'QL']] : []), ...(can(state, 'members.manage') ? [['admin', 'Teams & access', 'TA']] : [])].map(([route, label, glyph]) => `
+          ${[...NAV, ...(can(state, 'quant.experiments.run') ? [['quant', 'Quant Lab', 'QL']] : []), ...(can(state, 'members.manage') ? [['admin', 'People & Teams', 'PT']] : [])].map(([route, label, glyph]) => `
             <a class="nav-link ${state.route === route ? 'is-active' : ''}" href="#${route}" aria-current="${state.route === route ? 'page' : 'false'}">
               <span class="nav-code">${glyph}</span><span>${label}</span>${route === 'proposals' && state.pendingCount ? `<i class="nav-count">${state.pendingCount}</i>` : ''}
             </a>`).join('')}
@@ -112,10 +113,10 @@ export function renderApplication(state) {
 function renderPage(state) {
   switch (state.route) {
     case 'markets': return marketsPage(state);
+    case 'research': return researchPage(state);
     case 'proposals': return proposalsPage(state);
     case 'portfolio': return portfolioPage(state);
     case 'activity': return activityPage(state);
-    case 'manager': return managerPage(state);
     case 'quant': return quantPage(state);
     case 'admin': return adminPage(state);
     default: return overviewPage(state);
@@ -123,7 +124,7 @@ function renderPage(state) {
 }
 
 function pageTitle(route) {
-  return ({ overview: 'Overview', markets: 'Markets', proposals: 'Proposals', portfolio: 'Portfolio', activity: 'Activity', manager: 'Manager desk', quant: 'Quant Lab', admin: 'Teams & access' })[route] || 'Overview';
+  return ({ overview: 'Overview', markets: 'Markets', research: 'Research', proposals: 'Proposals', portfolio: 'Portfolios', activity: 'Activity', quant: 'Quant Lab', admin: 'People & Teams' })[route] || 'Overview';
 }
 
 function renderSearchResults(query) {
@@ -173,7 +174,7 @@ function overviewPage(state) {
   const declining = watchQuotes.filter((quote) => quote.change < 0).length;
   const own = calculatePortfolio(state.trades, state.user?.id, state.market.quotes);
   const pending = state.proposals.filter((proposal) => proposal.status === 'pending').length;
-  const portfolioLabel = state.user && state.role !== 'pending' ? formatMoney(own.equity) : '—';
+  const portfolioLabel = state.user && state.role !== 'pending' ? formatAvailableMoney(own.equity) : '—';
   const activity = state.trades.slice(0, 5);
   return `
     ${heading('MARKET INTELLIGENCE / CLUB WORKSPACE', 'Investment desk<span class="heading-period">.</span>', 'A shared research book for intern theses, manager decisions, quantitative findings, and simulated execution.', can(state, 'proposals.create') ? `<button class="button button-accent" type="button" data-action="open-proposal">New thesis <span>＋</span></button>` : '')}
@@ -226,7 +227,7 @@ function marketsPage(state) {
     .slice(0, 7);
 
   return `
-    ${heading('MARKET MONITOR / UNITED STATES', 'Markets<span class="heading-period">.</span>', 'Search the covered universe, compare the tape, and study price history.', `<form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form>`)}
+    ${heading('MARKET MONITOR / UNITED STATES', 'Markets<span class="heading-period">.</span>', 'Search the covered universe, compare the tape, and study price history.', `<div class="market-heading-actions"><form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form><a class="button" href="#research?symbol=${encodeURIComponent(state.symbol)}">Research ${h(state.symbol)} ↗</a></div>`)}
     <section class="quote-header">
       <div class="quote-identity"><span class="exchange-code">${h(item.exchange)}</span><h2>${h(state.symbol)}</h2><p>${h(item.name)} <i>·</i> ${h(item.sector)}</p></div>
       <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(change)}">${quote ? `${formatSignedMoney(change)} (${formatPercent(quote.changePercent)})` : 'Awaiting feed'}</span><small>${state.market.asOf ? `AS OF ${formatTime(state.market.asOf)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}` : 'NO EXCHANGE SNAPSHOT'}</small></div>
@@ -258,6 +259,38 @@ function marketsPage(state) {
   `;
 }
 
+function researchPage(state) {
+  const item = instrument(state.symbol);
+  const quote = quoteFor(state, state.symbol);
+  const linkedProposals = (state.proposals || []).filter((proposal) => proposal.symbol === state.symbol);
+  const linkedProposalIds = new Set(linkedProposals.map((proposal) => proposal.id));
+  const analyses = (state.quantAnalyses || []).filter((analysis) => linkedProposalIds.has(analysis.proposal_id));
+  const researchForm = `<form class="symbol-entry" id="market-search"><span>LOOKUP</span><input name="symbol" value="${h(state.symbol)}" maxlength="12" aria-label="Ticker symbol" autocomplete="off"><button class="button button-accent">Go <span>↵</span></button></form>`;
+  const proposalRows = linkedProposals.length
+    ? linkedProposals.slice(0, 5).map((proposal) => `<article class="research-proposal-row"><div><b>${h(proposal.side.toUpperCase())} ${h(proposal.symbol)}</b><small>${h(memberName(state, proposal.author_id))} · ${h(relativeTime(proposal.created_at))}</small></div><span class="status-tag status-${h(proposal.status)}">${h(proposal.status)}</span><a class="inline-link" href="#proposals">Open ↗</a></article>`).join('')
+    : `<div class="table-empty"><b>No club proposals for ${h(state.symbol)}.</b><span>${state.user ? 'Submitted theses linked to this security will appear here.' : 'Sign in to access club research and proposal history.'}</span>${can(state, 'proposals.create') ? `<button class="text-action" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">＋ Propose ${h(state.symbol)}</button>` : ''}</div>`;
+  const quantRows = analyses.length
+    ? analyses.slice(0, 4).map((analysis) => `<article class="research-quant-row"><div><b>${h(titleCase(analysis.recommendation))}</b><small>${h(memberName(state, analysis.analyst_id))} · ${h(formatTime(analysis.created_at))}</small></div><p>${h(analysis.summary)}</p></article>`).join('')
+    : '<div class="research-quant-empty">Quant findings appear here when a Quant member adds analysis to a linked proposal.</div>';
+  return `
+    ${heading('SECURITY RESEARCH / VERIFIED MARKET SNAPSHOT', 'Research<span class="heading-period">.</span>', 'Company classification, exchange data, club theses, and Quant findings for the selected security.', researchForm)}
+    <section class="quote-header research-quote-header">
+      <div class="quote-identity"><span class="exchange-code">${h(item.exchange)}</span><h2>${h(state.symbol)}</h2><p>${h(item.name)} <i>·</i> ${h(item.sector)}</p></div>
+      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(quote?.change ?? 0)}">${quote ? `${formatSignedMoney(quote.change)} (${formatPercent(quote.changePercent)})` : 'Awaiting verified quote'}</span><small>${state.market.asOf ? `AS OF ${formatTime(state.market.asOf)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}` : 'NO EXCHANGE SNAPSHOT'}</small></div>
+      <div class="quote-actions">${marketStatus(state)}<a class="button" href="#markets?symbol=${encodeURIComponent(state.symbol)}">Open chart & tape ↗</a>${can(state, 'proposals.create') ? `<button class="button button-accent" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">＋ New proposal</button>` : ''}</div>
+    </section>
+    <div class="research-grid">
+      <section class="panel research-profile"><div class="panel-heading"><div><div class="eyebrow">INSTRUMENT PROFILE</div><h2>${h(item.name)}</h2></div><span class="quiet-count">${h(item.symbol)}</span></div>
+        <div class="research-facts"><div><small>SECTOR</small><b>${h(item.sector || '—')}</b></div><div><small>EXCHANGE</small><b>${h(item.exchange || '—')}</b></div><div><small>MARKET STATUS</small><b>${state.market.source === 'iex' && state.market.marketClock ? (state.market.marketClock.isOpen ? 'Open' : 'Closed') : 'Unavailable'}</b></div><div><small>DATA SOURCE</small><b>${state.market.source === 'iex' ? 'Alpaca IEX' : state.market.source === 'training-sim' ? 'Training data' : 'Unavailable'}</b></div></div>
+        <div class="research-range-grid">${detailRow('Open', quote?.open)}${detailRow('Previous close', quote?.previousClose)}${detailRow('Day high', quote?.high)}${detailRow('Day low', quote?.low)}${detailRow('Volume', quote?.volume, true)}${detailRow('Bid', quote?.bid)}${detailRow('Ask', quote?.ask)}</div>
+        <p class="research-disclosure">Fundamental statements and analyst estimates are not connected. This profile shows instrument metadata and verified market-feed fields only.</p>
+      </section>
+      <section class="panel research-proposals"><div class="panel-heading"><div><div class="eyebrow">CLUB IDEAS / ${linkedProposals.length}</div><h2>Proposal activity</h2></div><a class="inline-link" href="#proposals">All proposals ↗</a></div>${proposalRows}</section>
+      <section class="panel research-quant"><div class="panel-heading"><div><div class="eyebrow">QUANT REVIEW / ${analyses.length}</div><h2>Quant findings</h2></div><a class="inline-link" href="#quant">Quant Lab ↗</a></div>${quantRows}</section>
+    </div>
+  `;
+}
+
 function detailRow(label, value, compact = false) {
   const display = value == null || !Number.isFinite(Number(value)) ? '—' : compact ? formatCompact(value) : formatMoney(value);
   return `<div class="detail-row"><span>${h(label)}</span><b>${display}</b></div>`;
@@ -267,12 +300,34 @@ function proposalsPage(state) {
   if (!state.user) return authGate('Proposals are shared with signed-in club members.', 'Sign in with email and password or Google to draft a thesis and review club research.');
   if (state.role === 'pending') return memberGate();
   const active = state.proposalFilter || 'all';
-  const proposals = active === 'all' ? state.proposals : state.proposals.filter((proposal) => proposal.status === active);
-  const tabs = ['all', 'pending', 'approved', 'executed', 'rejected'];
+  const proposals = state.proposals.filter((proposal) => {
+    if (active === 'all') return true;
+    if (active === 'closed') return ['executed', 'rejected'].includes(proposal.status);
+    return proposal.status === active;
+  });
+  const tabs = [
+    ['all', 'All'],
+    ['pending', can(state, 'proposals.review') ? 'Needs review' : 'Pending'],
+    ['approved', 'Approved / unfilled'],
+    ['closed', 'Closed'],
+  ];
+  const counts = Object.fromEntries(tabs.map(([status]) => [status, status === 'all'
+    ? state.proposals.length
+    : status === 'closed'
+      ? state.proposals.filter((proposal) => ['executed', 'rejected'].includes(proposal.status)).length
+      : state.proposals.filter((proposal) => proposal.status === status).length]));
+  const managerQueue = can(state, 'proposals.review');
+  const emptyCopy = active === 'all'
+    ? (managerQueue ? 'New submissions will appear here.' : 'Your club proposals will appear here.')
+    : active === 'pending'
+      ? (managerQueue ? 'No proposals awaiting your review.' : 'No pending proposals.')
+      : active === 'approved'
+        ? 'No approved proposals are waiting for a paper fill.'
+        : 'No completed or rejected proposals.';
   return `
-    ${heading('RESEARCH QUEUE / THESIS BEFORE TRADE', 'Proposals<span class="heading-period">.</span>', 'Interns submit the reasoning and risk. Managers approve or reject before paper execution.', can(state, 'proposals.create') ? `<button type="button" class="button button-accent" data-action="open-proposal">＋ Write a thesis</button>` : '')}
-    <div class="filter-tabs" role="tablist" aria-label="Filter proposals">${tabs.map((status) => `<button role="tab" type="button" data-action="proposal-filter" data-status="${status}" class="${active === status ? 'selected' : ''}" aria-selected="${active === status}">${status === 'all' ? 'All research' : titleCase(status)} <i>${status === 'all' ? state.proposals.length : state.proposals.filter((proposal) => proposal.status === status).length}</i></button>`).join('')}</div>
-    ${proposals.length ? `<div class="proposal-grid">${proposals.map((proposal) => proposalCard(state, proposal)).join('')}</div>` : `<section class="panel empty-panel"><span class="empty-code">${active === 'all' ? 'NO IDEAS' : `NO ${active.toUpperCase()}`}</span><h2>Nothing in this view yet.</h2><p>${active === 'all' ? 'Start with a security, a time horizon, a catalyst, and one way your thesis could fail.' : `No ${active} proposals are in the ledger.`}</p>${active === 'all' && can(state, 'proposals.create') ? '<button class="button button-accent" type="button" data-action="open-proposal">Draft first thesis</button>' : ''}</section>`}
+    ${heading(managerQueue ? 'MANAGER REVIEW QUEUE' : 'INVESTMENT RESEARCH', 'Proposals<span class="heading-period">.</span>', managerQueue ? 'Review submissions, record decisions, and enter paper fills for approved ideas.' : 'Submit an investment thesis and track its review through a paper-trade decision.', can(state, 'proposals.create') ? `<button type="button" class="button button-accent" data-action="open-proposal">＋ New proposal</button>` : '')}
+    <div class="filter-tabs proposal-queue-tabs" role="tablist" aria-label="Proposal status">${tabs.map(([status, label]) => `<button role="tab" type="button" data-action="proposal-filter" data-status="${status}" class="${active === status ? 'selected' : ''}" aria-selected="${active === status}">${label}<i>${counts[status]}</i></button>`).join('')}</div>
+    ${proposals.length ? `<div class="proposal-grid">${proposals.map((proposal) => proposalCard(state, proposal)).join('')}</div>` : `<section class="panel empty-panel proposal-empty"><h2>${active === 'pending' && managerQueue ? 'Queue clear' : 'No proposals in this view'}</h2><p>${emptyCopy}</p>${active === 'all' && can(state, 'proposals.create') ? '<button class="button button-accent" type="button" data-action="open-proposal">New proposal</button>' : ''}</section>`}
   `;
 }
 
@@ -319,36 +374,52 @@ function portfolioPage(state) {
     member,
     portfolio: calculatePortfolio(state.trades, member.user_id, state.market.quotes),
   }));
-  const totals = books.reduce((sum, row) => ({
-    equity: sum.equity + row.portfolio.equity,
-    cash: sum.cash + row.portfolio.cash,
-    marketValue: sum.marketValue + row.portfolio.marketValue,
-    totalPnl: sum.totalPnl + row.portfolio.totalPnl,
-    unrealizedPnl: sum.unrealizedPnl + row.portfolio.unrealizedPnl,
-    costBasis: sum.costBasis + row.portfolio.costBasis,
-    positionCount: sum.positionCount + row.portfolio.positions.length,
-  }), { equity: 0, cash: 0, marketValue: 0, totalPnl: 0, unrealizedPnl: 0, costBasis: 0, positionCount: 0 });
   const allPositions = books.flatMap(({ member, portfolio }) => portfolio.positions.map((position) => ({ ...position, ownerName: member.full_name || member.email || 'Club member' })));
   const priced = allPositions.filter((position) => position.quoteAvailable).length;
+  const valuationComplete = books.every(({ portfolio }) => portfolio.valuationComplete !== false
+    && !(portfolio.unpricedSymbols || []).length
+    && (portfolio.positions || []).every((position) => position.quoteAvailable && Number.isFinite(position.marketValue)));
+  const unpricedSymbols = [...new Set(books.flatMap(({ portfolio }) => [
+    ...(portfolio.unpricedSymbols || []),
+    ...(portfolio.positions || []).filter((position) => !position.quoteAvailable || !Number.isFinite(position.marketValue)).map((position) => position.symbol),
+  ]))];
+  const cashTotal = books.reduce((sum, row) => sum + row.portfolio.cash, 0);
+  const costBasisTotal = books.reduce((sum, row) => sum + row.portfolio.costBasis, 0);
+  const positionCount = allPositions.length;
+  const marketValueTotal = valuationComplete ? books.reduce((sum, row) => sum + row.portfolio.marketValue, 0) : null;
+  const equityTotal = valuationComplete ? cashTotal + marketValueTotal : null;
+  const unrealizedTotal = valuationComplete ? books.reduce((sum, row) => sum + row.portfolio.unrealizedPnl, 0) : null;
+  const totalPnl = valuationComplete ? books.reduce((sum, row) => sum + row.portfolio.totalPnl, 0) : null;
+  const valuationNote = valuationComplete
+    ? `${formatSignedMoney(totalPnl)} total simulated P/L`
+    : `Current quote unavailable: ${unpricedSymbols.join(', ') || 'open position'}`;
   return `
     ${heading(canViewAssigned ? 'ASSIGNED INTERN BOOKS / PAPER LEDGER' : 'SIMULATED BOOK / MARKED TO SELECTED FEED', 'Portfolio<span class="heading-period">.</span>', canViewAssigned ? 'Assigned intern accounts derived from approved paper fills, marked against the visible feed.' : 'Average-cost holdings from approved manager-recorded paper fills. Marks use the visible feed.', `${accountSelector}<a class="button" href="#activity">Open trade ledger ↗</a>`)}
     <div class="portfolio-summary">
-      ${summaryMetric(canViewAssigned ? 'Assigned paper equity' : 'Paper equity', formatMoney(totals.equity), `${formatSignedMoney(totals.totalPnl)} total simulated P/L`, classForChange(totals.totalPnl))}
-      ${summaryMetric('Available cash', formatMoney(totals.cash), 'Starting cash less buys, plus sells', '')}
-      ${summaryMetric('Open market value', formatMoney(totals.marketValue), `${totals.positionCount} open positions`, '')}
-      ${summaryMetric('Unrealized P/L', formatSignedMoney(totals.unrealizedPnl), `${formatPercent(totals.costBasis ? (totals.unrealizedPnl / totals.costBasis) * 100 : 0)} on cost basis`, classForChange(totals.unrealizedPnl))}
+      ${summaryMetric(canViewAssigned ? 'Assigned paper equity' : 'Paper equity', formatAvailableMoney(equityTotal), valuationNote, classForChange(totalPnl))}
+      ${summaryMetric('Available cash', formatMoney(cashTotal), 'Starting cash less buys, plus sells', '')}
+      ${summaryMetric('Open market value', formatAvailableMoney(marketValueTotal), valuationComplete ? `${positionCount} open positions` : `${positionCount} positions · valuation incomplete`, '')}
+      ${summaryMetric('Unrealized P/L', formatAvailableSignedMoney(unrealizedTotal), valuationComplete ? `${formatPercent(costBasisTotal ? (unrealizedTotal / costBasisTotal) * 100 : 0)} on cost basis` : `${unpricedSymbols.length} unpriced symbols`, classForChange(unrealizedTotal))}
     </div>
     ${portfolioHistoryPanel(state, portfolioUserId, selectedAccountName)}
-    ${canViewAssigned ? `<section class="panel assigned-books"><div class="panel-heading"><div><div class="eyebrow">PORTFOLIO COVERAGE / ${books.length} ACCOUNTS</div><h2>Assigned intern books</h2></div><span class="quiet-count">${h(coverageName)}</span></div>${books.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Intern / account</th><th>Team</th><th>Equity</th><th>Cash</th><th>Market value</th><th>Total P/L</th></tr></thead><tbody>${books.map(({member,portfolio}) => `<tr><td>${h(member.full_name || member.email || 'Club member')}</td><td>${h(member.team || '—')}</td><td class="numeric">${formatMoney(portfolio.equity)}</td><td class="numeric">${formatMoney(portfolio.cash)}</td><td class="numeric">${formatMoney(portfolio.marketValue)}</td><td class="numeric ${classForChange(portfolio.totalPnl)}">${formatSignedMoney(portfolio.totalPnl)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No Intern portfolios are assigned to this view.</b><span>The Owner assigns groups and Managers in Teams & access.</span></div>'}</section>` : ''}
+    ${canViewAssigned ? `<section class="panel assigned-books"><div class="panel-heading"><div><div class="eyebrow">PORTFOLIO COVERAGE / ${books.length} ACCOUNTS</div><h2>Assigned intern books</h2></div><span class="quiet-count">${h(coverageName)}</span></div>${books.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Intern / account</th><th>Team</th><th>Equity</th><th>Cash</th><th>Market value</th><th>Total P/L</th></tr></thead><tbody>${books.map(({member,portfolio}) => `<tr><td>${h(member.full_name || member.email || 'Club member')}</td><td>${h(member.team || '—')}</td><td class="numeric">${formatAvailableMoney(portfolio.equity)}</td><td class="numeric">${formatMoney(portfolio.cash)}</td><td class="numeric">${formatAvailableMoney(portfolio.marketValue)}</td><td class="numeric ${classForChange(portfolio.totalPnl)}">${formatAvailableSignedMoney(portfolio.totalPnl)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No Intern portfolios are assigned to this view.</b><span>Assign teams in People & Teams.</span></div>'}</section>` : ''}
     <section class="panel positions-panel"><div class="panel-heading"><div><div class="eyebrow">LONG POSITIONS / AVERAGE COST</div><h2>Holdings</h2></div><span class="quiet-count">${priced} of ${allPositions.length} marked from ${state.market.source === 'iex' ? 'IEX' : 'training data'}</span></div>
-      ${allPositions.length ? `<div class="table-frame"><table class="data-table positions-table"><thead><tr>${canViewAssigned ? '<th>Intern</th>' : ''}<th>Security</th><th>Shares</th><th>Avg. cost</th><th>Mark</th><th>Market value</th><th>Unrealized P/L</th></tr></thead><tbody>${allPositions.map((position) => `<tr>${canViewAssigned ? `<td>${h(position.ownerName)}</td>` : ''}<td><button class="instrument-select" type="button" data-action="open-symbol" data-symbol="${h(position.symbol)}"><b>${h(position.symbol)}</b><span>${h(instrument(position.symbol).name)}</span></button></td><td class="numeric">${formatNumber(position.shares, 4)}</td><td class="numeric">${formatMoney(position.averageCost)}</td><td class="numeric">${position.quoteAvailable ? formatMoney(position.mark) : `<span class="at-cost">${formatMoney(position.averageCost)} · cost</span>`}</td><td class="numeric">${formatMoney(position.marketValue)}</td><td class="numeric ${classForChange(position.unrealizedPnl)}">${formatSignedMoney(position.unrealizedPnl)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>${canViewAssigned ? 'No assigned holdings yet.' : 'No holdings yet.'}</b><span>Propose an idea, wait for manager approval, then the manager records the paper fill.</span><a class="text-action" href="#proposals">Open research queue ↗</a></div>`}
+      ${allPositions.length ? `<div class="table-frame"><table class="data-table positions-table"><thead><tr>${canViewAssigned ? '<th>Intern</th>' : ''}<th>Security</th><th>Shares</th><th>Avg. cost</th><th>Mark</th><th>Market value</th><th>Unrealized P/L</th></tr></thead><tbody>${allPositions.map((position) => `<tr>${canViewAssigned ? `<td>${h(position.ownerName)}</td>` : ''}<td><button class="instrument-select" type="button" data-action="open-symbol" data-symbol="${h(position.symbol)}"><b>${h(position.symbol)}</b><span>${h(instrument(position.symbol).name)}</span></button></td><td class="numeric">${formatNumber(position.shares, 4)}</td><td class="numeric">${formatMoney(position.averageCost)}</td><td class="numeric">${formatAvailableMoney(position.mark)}</td><td class="numeric">${formatAvailableMoney(position.marketValue)}</td><td class="numeric ${classForChange(position.unrealizedPnl)}">${formatAvailableSignedMoney(position.unrealizedPnl)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>${canViewAssigned ? 'No assigned holdings yet.' : 'No holdings yet.'}</b><span>Propose an idea, wait for manager approval, then the manager records the paper fill.</span><a class="text-action" href="#proposals">Open Proposals ↗</a></div>`}
     </section>
-    <div class="data-footnote">MARKET VALUE IS IEX PRICED WHEN CONNECTED; OTHERWISE OPEN POSITIONS DISPLAY AT COST. PAPER TRADES DO NOT ROUTE TO A BROKER.</div>
+    <div class="data-footnote">${valuationComplete ? 'OPEN POSITIONS ARE MARKED ONLY WITH VERIFIED QUOTES.' : `VALUATION UNAVAILABLE FOR ${h(unpricedSymbols.join(', ') || 'ONE OR MORE OPEN POSITIONS')} UNTIL A VERIFIED QUOTE ARRIVES.`}<span>Cash and average cost remain available; no cost-based price estimate is substituted. Paper trades do not route to a broker.</span></div>
   `;
 }
 
 function summaryMetric(label, value, foot, tone = '') {
   return `<article class="summary-metric"><small>${h(label)}</small><b class="${tone}">${h(value)}</b><span>${h(foot)}</span></article>`;
+}
+
+function formatAvailableMoney(value) {
+  return value != null && Number.isFinite(Number(value)) ? formatMoney(value) : '—';
+}
+
+function formatAvailableSignedMoney(value) {
+  return value != null && Number.isFinite(Number(value)) ? formatSignedMoney(value) : '—';
 }
 
 function portfolioHistoryPanel(state, userId, accountName) {
@@ -374,7 +445,7 @@ function portfolioHistoryPanel(state, userId, accountName) {
   return `<section class="panel portfolio-history-panel">
     <div class="panel-heading"><div><div class="eyebrow">DAILY MARKS / ${h(accountName)}</div><h2>Equity vs. SPY</h2></div><span class="source-label ${sourceIsTraining ? 'source-simulated' : 'source-connected'}"><i></i>${sourceLabel}</span></div>
     ${state.portfolioHistoryError ? `<div class="history-warning" role="status">${h(state.portfolioHistoryError)}</div>` : ''}
-    ${unpricedSymbols.length ? `<div class="history-warning" role="status">Portfolio equity is omitted on dates before a prior close exists for: ${h(unpricedSymbols.join(', '))}.</div>` : ''}
+    ${unpricedSymbols.length ? `<div class="history-warning" role="status">Portfolio equity is omitted on dates without a same-session close for: ${h(unpricedSymbols.join(', '))}.</div>` : ''}
     <div class="history-chart-wrap">${empty || historySvg(history)}</div>
     <div class="history-legend"><span><i class="equity-swatch"></i>${h(accountName)} equity</span><span><i class="benchmark-swatch"></i>SPY buy &amp; hold · $100,000</span><small>${history?.points.length ? `${history.points[0].date} — ${history.points.at(-1).date} · ${history.points.length} daily marks` : '—'}</small></div>
     <div class="history-metrics">
@@ -383,7 +454,7 @@ function portfolioHistoryPanel(state, userId, accountName) {
       ${summaryMetric('Annualized volatility', vol, 'Daily returns · 252 trading days', '')}
       ${summaryMetric('Sharpe ratio', sharpe, 'Zero risk-free rate · daily returns', '')}
     </div>
-    <p class="history-method">Daily points replay this account’s fills through each date and mark holdings at the latest available close. SPY starts at $100,000 on the first date in this period. ${sourceIsTraining ? 'Synthetic training bars are deterministic and are not market data.' : 'Alpaca IEX is an exchange-limited feed; dates shown are daily bars.'}</p>
+    <p class="history-method">Daily points replay this account’s fills through each date and mark holdings only with that session’s close; missing marks stay unavailable, with no older close carried forward. SPY starts at $100,000 on the first date in this period. ${sourceIsTraining ? 'Synthetic training bars are deterministic and are not market data.' : 'Alpaca IEX is an exchange-limited feed; dates shown are daily bars.'}</p>
   </section>`;
 }
 
@@ -454,27 +525,6 @@ function activityPage(state) {
       <div class="table-frame"><table class="data-table"><thead><tr><th>Recorded</th><th>Security</th><th>Account</th><th>Side</th><th>Shares</th><th>Fill price</th><th>Notional</th><th>Proposal</th></tr></thead><tbody>${filteredTrades.length ? filteredTrades.map((trade) => `<tr><td>${h(formatTime(trade.created_at))}</td><td><button class="instrument-select single-line" data-action="open-symbol" data-symbol="${h(trade.symbol)}"><b>${h(trade.symbol)}</b></button></td><td>${h(memberName(state, trade.author_id))}</td><td class="side-${h(trade.side)}">${h(trade.side.toUpperCase())}</td><td class="numeric">${formatNumber(trade.quantity, 4)}</td><td class="numeric">${formatMoney(trade.price)}</td><td class="numeric">${formatMoney(Number(trade.quantity) * Number(trade.price))}</td><td><a class="inline-link" href="#proposals">${h(String(trade.proposal_id).slice(0, 8))} ↗</a></td></tr>`).join('') : `<tr><td colspan="8" class="empty-cell">${trades.length ? 'No trades match these filters.' : 'No paper fills recorded.'}</td></tr>`}</tbody></table></div>
     </section>
     <div class="data-footnote">APPROVED PROPOSAL → MANAGER-ENTERED PAPER FILL → IMMUTABLE TRADE ROW.</div>
-  `;
-}
-
-function managerPage(state) {
-  if (!can(state, 'proposals.review')) return authGate('Manager desk is restricted.', 'Only members with proposal-review permission can view the review queue and club ledger.');
-  const pending = state.proposals.filter((proposal) => proposal.status === 'pending');
-  const open = state.proposals.filter((proposal) => proposal.status === 'approved');
-  const participation = calculateClubActivity(state.trades, (userId) => memberName(state, userId));
-  const assignedMembers = state.portfolioMembers.filter((member) => member.user_id !== state.user?.id);
-  const teamAccessLink = can(state, 'members.manage') ? '<a class="button" href="#admin">Teams & access ↗</a>' : '<a class="button" href="#portfolio">Assigned portfolios ↗</a>';
-  const today = new Date();
-  const todaysFills = state.trades.filter((trade) => new Date(trade.created_at).toDateString() === today.toDateString()).length;
-  return `
-    ${heading('MANAGER CONSOLE / CLUB CONTROL', 'Manager desk<span class="heading-period">.</span>', 'Review research from your assigned groups, follow member work, and record paper execution after approval.', teamAccessLink)}
-    <div class="manager-kpis">${summaryMetric('Pending decisions', String(pending.length).padStart(2, '0'), 'Awaiting manager review', pending.length ? 'is-warning' : '')}${summaryMetric('Approved / unfilled', String(open.length).padStart(2, '0'), 'Ready for manual paper entry', '')}${summaryMetric('Club paper fills', String(state.trades.length).padStart(2, '0'), `${todaysFills} recorded today`, '')}${summaryMetric('Assigned members', String(assignedMembers.length).padStart(2, '0'), 'Across your team assignments', '')}</div>
-    <div class="manager-grid"><section class="panel review-queue"><div class="panel-heading"><div><div class="eyebrow">DECISIONS REQUIRED</div><h2>Pending research</h2></div><span class="quiet-count">${pending.length}</span></div>${pending.length ? `<div class="proposal-list">${pending.map((proposal) => compactProposal(proposal, true)).join('')}</div>` : `<div class="table-empty"><b>No proposals need review.</b><span>New intern submissions will appear here.</span></div>`}</section>
-      <section class="panel execution-queue"><div class="panel-heading"><div><div class="eyebrow">APPROVED THESIS / PAPER EXECUTION</div><h2>Ready to record</h2></div><span class="quiet-count">${open.length}</span></div>${open.length ? `<div class="proposal-list">${open.map((proposal) => compactProposal(proposal, true)).join('')}</div>` : `<div class="table-empty"><b>No approved proposals are waiting.</b><span>When you approve an idea, record the simulated fill price in the proposal queue.</span></div>`}</section>
-    </div>
-    <div class="manager-bottom-grid"><section class="panel manager-recent"><div class="panel-heading"><div><div class="eyebrow">RECENT EXECUTIONS</div><h2>Latest fills</h2></div><a href="#activity" class="inline-link">View full ledger ↗</a></div>${state.trades.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Time</th><th>Symbol</th><th>Intern</th><th>Side</th><th>Quantity</th><th>Fill</th><th>Recorded by</th></tr></thead><tbody>${state.trades.slice(0, 7).map((trade) => `<tr><td>${h(relativeTime(trade.created_at))}</td><td><b>${h(trade.symbol)}</b></td><td>${h(memberName(state, trade.author_id))}</td><td class="side-${h(trade.side)}">${h(trade.side.toUpperCase())}</td><td class="numeric">${formatNumber(trade.quantity, 4)}</td><td class="numeric">${formatMoney(trade.price)}</td><td>${h(memberName(state, trade.executed_by))}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No executions recorded.</b><span>Approvals and manual paper entries will be logged here.</span></div>'}</section>
-      <section class="panel member-activity"><div class="panel-heading"><div><div class="eyebrow">ASSIGNED TEAM / INTERN ROSTER</div><h2>Your members</h2></div><span class="quiet-count">${assignedMembers.length}</span></div>${assignedMembers.length ? `<div class="assigned-member-list">${assignedMembers.map((member) => `<div class="assigned-member-row"><span class="avatar small-avatar">${h((member.full_name || member.email || '?').slice(0, 1).toUpperCase())}</span><span><b>${h(member.full_name || member.email || 'Club member')}</b><small>${h(member.team || 'No group assigned')}</small></span><span class="role-tag role-${h(member.role || 'pending')}">${h(member.role || 'member')}</span></div>`).join('')}</div>` : '<div class="table-empty"><b>No members are assigned to your desk yet.</b><span>The Owner assigns Managers to groups in Teams & access.</span></div>'}</section>
-      <section class="panel member-activity"><div class="panel-heading"><div><div class="eyebrow">MEMBER PARTICIPATION / NOT RETURNS</div><h2>Trading activity</h2></div></div>${participation.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Member</th><th>Fills</th><th>Buys / sells</th><th>Notional</th></tr></thead><tbody>${participation.slice(0, 8).map((member) => `<tr><td>${h(member.name)}</td><td class="numeric">${member.count}</td><td class="numeric">${member.buys} / ${member.sells}</td><td class="numeric">${formatMoney(member.notional)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No member activity yet.</b><span>Notional tracks recorded trade size only. It is not a return ranking.</span></div>'}<div class="manager-footnote">NOTIONAL IS PAPER FILL SIZE; IT DOES NOT MEASURE PERFORMANCE.</div></section></div>
   `;
 }
 
@@ -557,7 +607,7 @@ function adminPage(state) {
     const managerNames = teamManagers.map((id) => state.adminMembers.find((member) => member.user_id === id)).filter(Boolean).map((member) => member.full_name || member.email);
     return `<article class="team-admin-card ${team.active === false ? 'is-inactive' : ''}">
       <div class="team-admin-heading"><div><div class="eyebrow">${h(team.team_code)}</div><h3>${h(team.team_name || team.team_code)}</h3></div><span class="quiet-count">${Number(team.member_count || 0)} members</span></div>
-      <p class="team-admin-description">${h(team.description || 'No group description yet.')}</p>
+      ${team.description ? `<p class="team-admin-description">${h(team.description)}</p>` : ''}
       <form class="team-details-form" data-form="club-team">
         <input type="hidden" name="team_code" value="${h(team.team_code)}">
         <label>GROUP NAME<input name="name" value="${h(team.team_name || '')}" maxlength="80" required></label>
@@ -565,7 +615,7 @@ function adminPage(state) {
         <button class="button compact" type="submit">Save group</button>
       </form>
       <form class="team-managers-form" data-form="team-managers" data-team-code="${h(team.team_code)}">
-        <label>ASSIGNED MANAGERS<select name="manager_user_ids" multiple size="${Math.max(2, Math.min(4, activeManagers.length || 2))}" aria-label="Managers assigned to ${h(team.team_name || team.team_code)}">${activeManagers.map((manager) => `<option value="${h(manager.user_id)}" ${teamManagers.includes(manager.user_id) ? 'selected' : ''}>${h(manager.full_name || manager.email)}</option>`).join('')}</select><small>Hold Ctrl/Cmd to assign multiple managers.</small></label>
+        <label>ASSIGNED MANAGERS<select name="manager_user_ids" multiple size="${Math.max(2, Math.min(4, activeManagers.length || 2))}" aria-label="Managers assigned to ${h(team.team_name || team.team_code)}">${activeManagers.map((manager) => `<option value="${h(manager.user_id)}" ${teamManagers.includes(manager.user_id) ? 'selected' : ''}>${h(manager.full_name || manager.email)}${manager.full_name && manager.email ? ` · ${h(manager.email)}` : ''}</option>`).join('')}</select><small>Hold Ctrl/Cmd to assign multiple managers.</small></label>
         <button class="button compact" type="submit">Save managers</button>
       </form>
       <div class="team-admin-foot"><span>MANAGERS</span><b>${managerNames.length ? h(managerNames.join(' · ')) : 'None assigned'}</b></div>
@@ -587,9 +637,9 @@ function adminPage(state) {
   }).join('');
   const auditRows = state.auditLog.map((event) => `<tr><td>${h(formatTime(event.created_at))}</td><td>${h(event.action)}</td><td>${h(memberName(state, event.actor_id))}</td><td>${h(memberName(state, event.target_user_id))}</td><td><code>${h(JSON.stringify(event.details || {}))}</code></td></tr>`).join('');
   return `
-    ${heading('PLATFORM ADMINISTRATION / OWNER ONLY', 'Teams & access<span class="heading-period">.</span>', 'Organize working groups, assign their managers, invite members, and control roles and permissions.', `<span class="source-label source-neutral">${state.adminMembers.filter((member) => member.active).length} ACTIVE MEMBERS</span>`)}
+    ${heading('OWNER ADMINISTRATION', 'People & Teams<span class="heading-period">.</span>', 'Invite members, assign groups and managers, and manage roles and access.', `<span class="source-label source-neutral">${state.adminMembers.filter((member) => member.active).length} ACTIVE</span>`)}
     <section class="panel teams-admin-panel"><div class="panel-heading"><div><div class="eyebrow">WORKING GROUPS</div><h2>Teams and managers</h2></div><span class="quiet-count">${teams.length} groups</span></div>
-      <p class="admin-section-intro">Assign Interns and Quants to a primary group, then add one or more Managers to oversee its Intern portfolios.</p>
+      <p class="admin-section-intro">Assign Interns and Quants to a group, then add Managers to oversee its portfolios.</p>
       <div class="team-admin-grid">${teamCards || '<div class="table-empty"><b>No groups have been configured.</b><span>Create one below, then assign members and Managers.</span></div>'}</div>
       <form class="new-team-form" data-form="club-team"><div><div class="eyebrow">NEW WORKING GROUP</div><h3>Create a group</h3></div><label>GROUP CODE<input name="team_code" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,31}" placeholder="e.g. ENERGY" required></label><label>GROUP NAME<input name="name" maxlength="80" placeholder="Energy research" required></label><label>DESCRIPTION<input name="description" maxlength="500" placeholder="Focus or mandate"></label><button class="button button-accent" type="submit">Create group</button></form>
     </section>

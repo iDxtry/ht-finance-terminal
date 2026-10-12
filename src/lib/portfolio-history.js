@@ -26,7 +26,7 @@ function dayEndTimestamp(day) {
 }
 
 function normalizeBars(bars) {
-  return (bars || [])
+  const normalized = (bars || [])
     .map((bar) => {
       const day = dayKey(bar?.date ?? bar?.day ?? bar?.timestamp ?? bar?.time);
       const close = Number(bar?.close);
@@ -34,6 +34,11 @@ function normalizeBars(bars) {
     })
     .filter(Boolean)
     .sort((left, right) => left.day.localeCompare(right.day));
+  // A daily series must have at most one close per session. If a provider
+  // returns duplicates, use the final value in its response deterministically.
+  const byDay = new Map();
+  for (const bar of normalized) byDay.set(bar.day, bar);
+  return [...byDay.values()];
 }
 
 function entriesOfBarsBySymbol(priceBarsBySymbol) {
@@ -104,10 +109,12 @@ function calculateRiskMetrics(points, equityKey) {
  *
  * Dates are calendar days encoded by daily-bar `date`, `day`, or timestamp fields.
  * Each point is valued at 23:59:59.999 UTC for that date, so only fills at or
- * before that end-of-day cutoff are included. A position without a prior close
- * makes that day's portfolio equity unavailable (`null`) rather than using cost
- * basis as a fabricated market mark. `startDate` filters output dates; fills
- * before it are still replayed to establish the account's positions and cash.
+ * before that end-of-day cutoff are included. A position without a close for
+ * that exact session makes that day's portfolio equity unavailable (`null`)
+ * rather than carrying a stale close or using cost basis as a fabricated mark.
+ * Fill-only dates are retained and remain unpriced when no same-session bar
+ * exists. `startDate` filters output dates; fills before it are still replayed
+ * to establish the account's positions and cash.
  */
 export function buildPortfolioHistory({
   trades = [],
@@ -132,21 +139,26 @@ export function buildPortfolioHistory({
   const spyBars = normalizeBars(benchmarkBars);
   const days = new Set(spyBars.map((bar) => bar.day));
   for (const bars of barsBySymbol.values()) for (const bar of bars) days.add(bar.day);
+  for (const fill of fills) {
+    const day = new Date(fill.timestamp).toISOString().slice(0, 10);
+    days.add(day);
+  }
   const firstOutputDay = startDate ? dayKey(startDate) : null;
   const outputDays = [...days]
     .filter((day) => !firstOutputDay || day >= firstOutputDay)
     .sort();
 
   const positions = new Map();
-  const latestClose = new Map();
-  const barCursors = new Map([...barsBySymbol].map(([symbol]) => [symbol, 0]));
+  const closesBySymbolAndDay = new Map([...barsBySymbol].map(([symbol, bars]) => [
+    symbol,
+    new Map(bars.map((bar) => [bar.day, bar.close])),
+  ]));
+  const spyCloseByDay = new Map(spyBars.map((bar) => [bar.day, bar.close]));
   const fillsByDayOrder = fills;
   let fillCursor = 0;
   let cash = STARTING_CASH;
   let realizedPnl = 0;
   let spyShares = null;
-  let spyEntryPrice = null;
-  let spyCursor = 0;
   const points = [];
 
   for (const day of outputDays) {
@@ -175,28 +187,16 @@ export function buildPortfolioHistory({
       positions.set(fill.symbol, position);
     }
 
-    for (const [symbol, bars] of barsBySymbol) {
-      let cursor = barCursors.get(symbol);
-      while (cursor < bars.length && bars[cursor].day <= day) {
-        latestClose.set(symbol, bars[cursor].close);
-        cursor += 1;
-      }
-      barCursors.set(symbol, cursor);
-    }
-
-    while (spyCursor < spyBars.length && spyBars[spyCursor].day <= day) {
-      const bar = spyBars[spyCursor++];
-      if (spyShares === null && (!firstOutputDay || bar.day >= firstOutputDay)) {
-        spyEntryPrice = bar.close;
-        spyShares = STARTING_CASH / spyEntryPrice;
-      }
+    const spyClose = spyCloseByDay.get(day);
+    if (spyShares === null && Number.isFinite(spyClose) && (!firstOutputDay || day >= firstOutputDay)) {
+      spyShares = STARTING_CASH / spyClose;
     }
 
     const activePositions = [...positions.values()].filter((position) => position.shares > SHARE_EPSILON);
     let marketValue = 0;
     const unpricedSymbols = [];
     const markedPositions = activePositions.map((position) => {
-      const close = latestClose.get(position.symbol);
+      const close = closesBySymbolAndDay.get(position.symbol)?.get(day);
       if (!Number.isFinite(close)) {
         unpricedSymbols.push(position.symbol);
         return { ...position, close: null, marketValue: null };
@@ -207,7 +207,9 @@ export function buildPortfolioHistory({
     });
     const fullyPriced = unpricedSymbols.length === 0;
     const equity = fullyPriced ? cash + marketValue : null;
-    const benchmarkEquity = spyShares === null ? null : spyShares * (spyBars[spyCursor - 1]?.close ?? spyEntryPrice);
+    // Do not carry an old SPY close forward onto a session with no benchmark
+    // bar. A missing date is unknown, not a zero-return observation.
+    const benchmarkEquity = spyShares === null || !Number.isFinite(spyClose) ? null : spyShares * spyClose;
 
     points.push({
       date: day,

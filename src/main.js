@@ -12,7 +12,7 @@ import { isPublicMarketSymbol } from '../supabase/functions/_shared/market-acces
 
 const app = document.querySelector('#app');
 let watchlistSyncTimer = null;
-const ROUTES = new Set(['overview', 'markets', 'proposals', 'portfolio', 'activity', 'manager', 'quant', 'admin']);
+const ROUTES = new Set(['overview', 'markets', 'research', 'proposals', 'portfolio', 'activity', 'quant', 'admin']);
 const STARTING_SYMBOLS = ['SPY', 'QQQ', 'DIA', 'IWM', 'TLT', 'GLD', 'AAPL', 'NVDA'];
 const RANGE_CONFIG = {
   '1D': { interval: '5Min', count: 78 },
@@ -96,7 +96,10 @@ function hasPermission(permission) {
 function hashState() {
   const [path = '', query = ''] = location.hash.replace(/^#/, '').split('?');
   const params = new URLSearchParams(query);
-  const route = ROUTES.has(path) ? path : 'overview';
+  const legacyManagerRoute = path === 'manager';
+  const legacyPeopleRoute = path === 'members';
+  const route = legacyManagerRoute ? 'proposals' : legacyPeopleRoute ? 'admin' : ROUTES.has(path) ? path : 'overview';
+  if (legacyManagerRoute) state.proposalFilter = 'pending';
   try {
     if (params.has('symbol')) changeSelectedSymbol(cleanSymbol(params.get('symbol')));
   } catch {
@@ -108,8 +111,8 @@ function hashState() {
 
 function setHash(route, params = {}) {
   const query = new URLSearchParams();
-  if (route === 'markets' && params.symbol) query.set('symbol', params.symbol);
-  if (route === 'markets' && params.range && params.range !== '1M') query.set('range', params.range);
+  if (['markets', 'research'].includes(route) && params.symbol) query.set('symbol', params.symbol);
+  if (['markets', 'research'].includes(route) && params.range && params.range !== '1M') query.set('range', params.range);
   const next = `#${route}${query.size ? `?${query}` : ''}`;
   if (location.hash === next) {
     hashState();
@@ -481,7 +484,6 @@ async function loadClubData() {
     state.adminTeams = [];
     state.auditLog = [];
   }
-  if (state.route === 'manager' && !hasPermission('proposals.review')) setHash('overview');
   if (state.route === 'admin' && !hasPermission('members.manage')) setHash('overview');
   if (state.route === 'quant' && !hasPermission('quant.experiments.run')) setHash('overview');
   render();
@@ -787,7 +789,7 @@ function navigateToSymbol(value) {
   state.searchOpen = false;
   state.searchQuery = '';
   changeSelectedSymbol(symbol);
-  setHash('markets', { symbol, range: state.chartRange });
+  setHash('research', { symbol, range: state.chartRange });
   void refreshMarketData({ silent: true });
 }
 

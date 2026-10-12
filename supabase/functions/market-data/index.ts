@@ -59,10 +59,10 @@ function cacheResponse(key: string, ttlMs: number, body: unknown, origin: string
   return response(body, 200, origin);
 }
 
-function response(body: unknown, status: number, origin: string) {
+function response(body: unknown, status: number, origin: string, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Access-Control-Allow-Origin': origin },
+    headers: { ...corsHeaders, 'Access-Control-Allow-Origin': origin, ...extraHeaders },
   });
 }
 
@@ -115,7 +115,11 @@ Deno.serve(async (request) => {
   if (isPublicViewer) {
     const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'unknown';
     if (!allowGuestRequest(clientIp)) {
-      return response({ ok: false, error: 'Guest market-data limit reached. Wait a minute and try again.' }, 429, origin);
+      return response({
+        ok: false,
+        code: 'RATE_LIMITED',
+        error: 'Guest market-data limit reached. Wait a minute and try again.',
+      }, 429, origin, { 'Retry-After': '60' });
     }
   }
 
@@ -149,14 +153,23 @@ Deno.serve(async (request) => {
       if (!symbols.length || symbols.length > maxSymbols || !symbols.every(validSymbol)) {
         return response({ ok: false, error: `Choose between 1 and ${maxSymbols} valid US stock or ETF symbols.` }, 400, origin);
       }
-      if (isPublicViewer && !symbols.every(isPublicMarketSymbol)) {
-        return response({ ok: false, error: 'Guest market access covers the listed stocks and ETFs in the research preview.' }, 403, origin);
+      const unavailableSymbols = isPublicViewer ? symbols.filter((symbol) => !isPublicMarketSymbol(symbol)) : [];
+      const requestedSymbols = isPublicViewer ? symbols.filter(isPublicMarketSymbol) : symbols;
+      if (!requestedSymbols.length) {
+        return response({
+          ok: true,
+          feed: 'iex',
+          quotes: {},
+          unavailableSymbols,
+          marketClock: null,
+          receivedAt: new Date().toISOString(),
+        }, 200, origin);
       }
-      const cacheKey = `snapshots:${symbols.sort().join(',')}`;
+      const cacheKey = `snapshots:${requestedSymbols.sort().join(',')}`;
       const cached = cachedResponse(cacheKey, 15_000, origin);
       if (cached) return cached;
       const url = new URL('https://data.alpaca.markets/v2/stocks/snapshots');
-      url.searchParams.set('symbols', symbols.join(','));
+      url.searchParams.set('symbols', requestedSymbols.join(','));
       url.searchParams.set('feed', 'iex');
       const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
       if (!upstream.ok) return providerError(upstream, origin);
@@ -210,6 +223,7 @@ Deno.serve(async (request) => {
         ok: true,
         feed: 'iex',
         quotes,
+        unavailableSymbols,
         marketClock,
         receivedAt: new Date().toISOString(),
       }, origin);
@@ -242,7 +256,7 @@ Deno.serve(async (request) => {
       url.searchParams.set('sort', isPublicViewer ? 'desc' : 'asc');
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());
-      const maximumBars = range === '5Y' && timeframe === '1Day' && !isPublicViewer ? 1500 : limit;
+      const maximumBars = limit;
       const rawBars: any[] = [];
       let pageToken: string | null = null;
       for (let page = 0; page < 3 && rawBars.length < maximumBars; page += 1) {
@@ -267,7 +281,14 @@ Deno.serve(async (request) => {
         low: Number(bar.l),
         close: Number(bar.c),
         volume: Number(bar.v),
-      })).filter((bar: any) => Number.isFinite(bar.time) && Number.isFinite(bar.close));
+      })).filter((bar: any) => Number.isFinite(bar.time)
+        && Number.isFinite(bar.open) && bar.open > 0
+        && Number.isFinite(bar.high) && bar.high > 0
+        && Number.isFinite(bar.low) && bar.low > 0
+        && Number.isFinite(bar.close) && bar.close > 0
+        && bar.high >= Math.max(bar.open, bar.close)
+        && bar.low <= Math.min(bar.open, bar.close)
+        && Number.isFinite(bar.volume) && bar.volume >= 0);
       return cacheResponse(cacheKey, 60_000, {
         ok: true,
         symbol,
@@ -280,11 +301,21 @@ Deno.serve(async (request) => {
 
     return response({ ok: false, error: 'Unknown market-data action.' }, 400, origin);
   } catch (error) {
-    return response({ ok: false, error: error instanceof Error ? error.message : 'Market data request failed.' }, 502, origin);
+    return response({
+      ok: false,
+      code: 'MARKET_PROVIDER_UNAVAILABLE',
+      error: 'The shared Alpaca IEX service is temporarily unavailable. Try again shortly.',
+    }, 502, origin);
   }
 });
 
 async function providerError(upstream: Response, origin: string) {
   const status = upstream.status === 401 || upstream.status === 403 ? 502 : upstream.status;
-  return response({ ok: false, error: `Alpaca IEX returned HTTP ${upstream.status}. Try again shortly or check feed setup.` }, status, origin);
+  const retryAfter = upstream.headers.get('Retry-After');
+  const extraHeaders: Record<string, string> = status === 429 && retryAfter ? { 'Retry-After': retryAfter } : {};
+  return response({
+    ok: false,
+    code: status === 429 ? 'RATE_LIMITED' : 'MARKET_PROVIDER_UNAVAILABLE',
+    error: 'The shared Alpaca IEX service is temporarily unavailable. Try again shortly.',
+  }, status, origin, extraHeaders);
 }
