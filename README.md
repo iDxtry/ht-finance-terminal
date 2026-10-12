@@ -64,7 +64,7 @@ The trade RPC serializes fills per member, enforces simulated buying power and s
 
 ## Current limits
 
-The app is a student paper-trading workspace, not a brokerage. It does not yet provide a full order lifecycle, options, full-company financial statements, file uploads, saved panel layouts, daily portfolio equity history, an SPY-relative performance series, or a return-based leaderboard. The historical moving-average test and the GBM/Monte Carlo tools are educational models with the assumptions shown in the Quant Lab. Market data requires the Owner to add Alpaca API keys to Supabase; until then, synthetic training values are labeled and excluded from claims of live pricing.
+The app is a student paper-trading workspace, not a brokerage. It does not yet provide a full order lifecycle, options, full-company financial statements, file uploads, saved panel layouts, or a return-based leaderboard. Daily portfolio equity and SPY comparison are reconstructed from the trade ledger and available historical bars; the app does not yet store daily valuation snapshots. The historical moving-average test and GBM/Monte Carlo tools are educational models with the assumptions shown in the Quant Lab. Market data requires the Owner to add Alpaca API keys to Supabase; until then, synthetic training values are labeled and excluded from claims of live pricing.
 
 ## Hosting
 
