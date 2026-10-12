@@ -42,6 +42,16 @@ test('accepts the Unix-second timestamps used by the market-data service', () =>
   assert.equal(history.points[1].benchmarkEquity, 101_000);
 });
 
+test('ignores malformed daily dates from a market-data response', () => {
+  const history = buildPortfolioHistory({
+    userId: 'intern-a',
+    benchmarkBars: [bar('2026-02-30', 400), bar('not-a-date', 405)],
+  });
+
+  assert.deepEqual(history.points, []);
+  assert.equal(history.metrics.cumulativeReturnPercent, null);
+});
+
 test('includes only this account and fills through each daily end timestamp', () => {
   const history = buildPortfolioHistory({
     userId: 'intern-a',
