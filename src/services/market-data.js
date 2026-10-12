@@ -22,28 +22,137 @@ function writeCache(key, value) {
   return value;
 }
 
-async function requestMarketData(supabase, body, cacheKey) {
-  const cached = readCache(cacheKey);
-  if (cached) return cached;
-  if (!supabase) {
-    throw new MarketDataError('Sign in and connect the market-data function to load exchange prices.', { code: 'NO_SESSION' });
+async function cacheScope(supabase) {
+  // Keep authenticated responses separate from the public guest cache. This
+  // prevents a quote for a member-only symbol from surviving sign-out.
+  if (typeof supabase?.auth?.getSession !== 'function') return null;
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return null;
+    const userId = data?.session?.user?.id;
+    return userId ? `member:${userId}` : 'public';
+  } catch {
+    return null;
   }
-  const { data, error } = await supabase.functions.invoke('market-data', { body });
-  if (error) {
-    const message = error.message || 'The market-data service is not responding.';
-    throw new MarketDataError(
-      /function|404|not found/i.test(message)
-        ? 'The market-data function is not deployed yet. Open Setup for the free IEX connection steps.'
-        : message,
-      { cause: error, code: 'EDGE_FUNCTION_UNAVAILABLE' },
-    );
-  }
-  if (!data?.ok) {
-    throw new MarketDataError(data?.error || 'The market-data service returned an invalid response.', {
-      code: data?.code || 'INVALID_RESPONSE',
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function assertSharedIexPayload(data, request) {
+  if (!isRecord(data) || data.feed !== 'iex') {
+    throw new MarketDataError('The market-data service did not return verified shared Alpaca IEX data.', {
+      code: 'UNTRUSTED_MARKET_DATA',
     });
   }
-  return writeCache(cacheKey, data);
+
+  if (request.action === 'snapshots') {
+    if (!isRecord(data.quotes)) {
+      throw new MarketDataError('The shared IEX service returned an invalid quote response.', {
+        code: 'INVALID_RESPONSE',
+      });
+    }
+    for (const [symbol, quote] of Object.entries(data.quotes)) {
+      const price = Number(quote?.price);
+      if (!isRecord(quote) || quote.feed !== 'iex' || quote.symbol !== symbol || !Number.isFinite(price) || price <= 0) {
+        throw new MarketDataError('The shared IEX service returned an invalid quote. No substitute price was used.', {
+          code: 'INVALID_RESPONSE',
+        });
+      }
+    }
+  } else if (request.action === 'bars') {
+    if (!Array.isArray(data.bars)) {
+      throw new MarketDataError('The shared IEX service returned invalid chart history.', {
+        code: 'INVALID_RESPONSE',
+      });
+    }
+    for (const bar of data.bars) {
+      const values = ['time', 'open', 'high', 'low', 'close', 'volume'].map((key) => Number(bar?.[key]));
+      const [time, open, high, low, close, volume] = values;
+      if (!values.every(Number.isFinite) || time <= 0 || open <= 0 || close <= 0 || low <= 0 || high < Math.max(open, close) || low > Math.min(open, close) || volume < 0) {
+        throw new MarketDataError('The shared IEX service returned invalid chart data. No substitute prices were used.', {
+          code: 'INVALID_RESPONSE',
+        });
+      }
+    }
+  }
+}
+
+async function readFunctionErrorPayload(error) {
+  const response = error?.context;
+  if (!response || typeof response.json !== 'function') return null;
+  try {
+    const copy = typeof response.clone === 'function' ? response.clone() : response;
+    const payload = await copy.json();
+    return isRecord(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function describeFunctionFailure(error, payload) {
+  const status = error?.context?.status;
+  if (payload?.code === 'FEED_NOT_CONFIGURED') {
+    return {
+      message: 'The shared Alpaca IEX connection is not configured on the server. Contact a club administrator.',
+      code: 'FEED_NOT_CONFIGURED',
+    };
+  }
+  if (status === 429) {
+    return {
+      message: payload?.error || 'The shared market-data service is busy. Wait a minute and try again.',
+      code: 'RATE_LIMITED',
+    };
+  }
+
+  const serverMessage = typeof payload?.error === 'string' ? payload.error : '';
+  const originalMessage = typeof error?.message === 'string' ? error.message : '';
+  if (/Alpaca IEX returned HTTP|feed setup/i.test(serverMessage)) {
+    return {
+      message: 'The shared Alpaca IEX feed is temporarily unavailable. Try again shortly or contact a club administrator.',
+      code: 'MARKET_PROVIDER_UNAVAILABLE',
+    };
+  }
+  if (/function|404|not found/i.test(`${serverMessage} ${originalMessage}`)) {
+    return {
+      message: 'The shared market-data service is not deployed or reachable yet. Contact a club administrator.',
+      code: 'EDGE_FUNCTION_UNAVAILABLE',
+    };
+  }
+  return {
+    message: serverMessage || originalMessage || 'The shared market-data service is not responding.',
+    code: 'EDGE_FUNCTION_UNAVAILABLE',
+  };
+}
+
+async function requestMarketData(supabase, body, cacheKey) {
+  if (!supabase?.functions?.invoke) {
+    throw new MarketDataError('Market data is unavailable because the public Supabase client is not configured in this build.', {
+      code: 'CLIENT_NOT_CONFIGURED',
+    });
+  }
+  const scope = await cacheScope(supabase);
+  const scopedCacheKey = scope ? `${scope}:${cacheKey}` : null;
+  const cached = scopedCacheKey ? readCache(scopedCacheKey) : null;
+  if (cached) return cached;
+
+  // Supabase's project URL and public anon/publishable key are shared app
+  // configuration. The Alpaca key pair stays inside the Edge Function secrets.
+  // Invoking this function does not require a member login for its public IEX
+  // research symbols; the server applies guest limits and origin checks.
+  const { data, error } = await supabase.functions.invoke('market-data', { body });
+  if (error) {
+    const payload = await readFunctionErrorPayload(error);
+    const failure = describeFunctionFailure(error, payload);
+    throw new MarketDataError(failure.message, { cause: error, code: failure.code });
+  }
+  if (!data?.ok) {
+    const failure = describeFunctionFailure({ message: data?.error }, data);
+    throw new MarketDataError(failure.message, { cause: data, code: data?.code || failure.code });
+  }
+  assertSharedIexPayload(data, body);
+  return scopedCacheKey ? writeCache(scopedCacheKey, data) : data;
 }
 
 export async function loadSnapshots(supabase, symbols) {
