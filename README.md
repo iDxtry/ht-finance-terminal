@@ -23,7 +23,7 @@ npm run build
 
 ## Supabase setup
 
-For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply `supabase/migrations/202610110001_owner_quant_rbac.sql`, `supabase/migrations/202610120001_flexible_club_teams.sql`, and `supabase/migrations/202610130001_numbered_club_groups.sql` in order. Existing club data and the HTIG/HTQF teams are preserved; the later migrations add Owner-managed groups, seed empty Group #1–#3 workspaces, support additional groups, and keep Manager/Quant access scoped to assigned groups.
+For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply migrations `202610110001_owner_quant_rbac.sql`, `202610120001_flexible_club_teams.sql`, `202610130001_numbered_club_groups.sql`, and `202610140001_group_access_and_guest_limits.sql` in order. Existing club data and the HTIG/HTQF teams are preserved; the migrations seed Group #1–#3, support additional groups, reconcile legacy Manager assignments against current group membership, and keep runtime access group-scoped.
 
 Configure Supabase Auth’s Site URL and redirect allow-list for the production host. If using both deployments, allow both:
 
@@ -38,11 +38,11 @@ Google OAuth remains available alongside email/password signup, sign-in, and pas
 
 Deploy `supabase/functions/owner-admin` after applying the migration. In Supabase Edge Function secrets, set `INITIAL_OWNER_EMAIL` to the verified account that should become the first Owner. The function checks the signed-in account’s verified email against this server-side setting and calls a service-role-only atomic database function that refuses to create a second initial Owner. It does not trust a role or email supplied by browser form values.
 
-The signed-in account that matches that email can initialize Owner access once. Afterward, invite members by email and manage roles, groups, Managers, and permissions in the Owner-only **Teams & access** workspace. Existing Auth users are assigned directly; new users receive a Supabase Auth invitation. The service-role key stays in Supabase Edge Functions and is never bundled into the frontend.
+The signed-in account that matches that email can initialize Owner access once. Afterward, invite members by email and manage roles, groups, Managers, and permissions in the Owner-only **People & Teams** workspace. Existing Auth users are assigned directly; new users receive a Supabase Auth invitation. The service-role key stays in Supabase Edge Functions and is never bundled into the frontend.
 
 ## Market data
 
-The terminal uses one shared Alpaca IEX connection through `supabase/functions/market-data`; members and signed-out visitors do not configure personal market-data credentials. Only the public Supabase project URL and public client key are in browser code. The Alpaca key pair is stored once in Supabase Edge Function secrets. The function uses short-lived caching, server-side polling, source timestamps, and Alpaca’s US market-session clock. IEX is one exchange feed, not consolidated SIP coverage; prints and volume can differ from whole-market totals. There is no WebSocket stream in this version. If the shared service is unavailable, guests see no price or chart substitution; authenticated members may use clearly labeled training data.
+The terminal uses one shared Alpaca IEX connection through `supabase/functions/market-data`; members and signed-out visitors do not configure personal market-data credentials. Only the public Supabase project URL and public client key are in browser code. The Alpaca key pair is stored once in Supabase Edge Function secrets. The function uses short-lived caching, source timestamps, and Alpaca’s US market-session clock. A Postgres-backed budget limits guests to 30 requests per client per minute and caps upstream calls at 180 per minute across guests and members; it fails closed if the database limiter is unavailable. Client addresses are SHA-256 hashed before storage and old counters are removed as the next requests arrive. IEX is one exchange feed, not consolidated SIP coverage; prints and volume can differ from whole-market totals. There is no WebSocket stream in this version. If the shared service is unavailable, guests see no price or chart substitution; authenticated members may use clearly labeled training data.
 
 Deploy the Edge Functions after the database migration:
 

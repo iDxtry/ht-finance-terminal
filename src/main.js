@@ -3,6 +3,7 @@ import { DEFAULT_WATCHLIST, cleanSymbol, findInstruments, instrument } from './d
 import { escapeHtml as h, formatMoney, formatTime } from './lib/format.js';
 import { calculatePortfolio } from './lib/portfolio.js';
 import { buildPortfolioHistory } from './lib/portfolio-history.js';
+import { encodeCsv } from './lib/csv.js';
 import { backendConfigured, supabase } from './lib/supabase.js';
 import { loadBars, loadSnapshots, MarketDataError } from './services/market-data.js';
 import { generateTrainingBars, trainingSnapshots } from './services/training-market.js';
@@ -1102,7 +1103,7 @@ function exportTrades() {
   for (const trade of state.trades) {
     rows.push([trade.created_at, trade.symbol, trade.side, trade.quantity, trade.price, Number(trade.quantity) * Number(trade.price), memberLabel(trade.author_id), memberLabel(trade.executed_by), trade.proposal_id]);
   }
-  const csv = rows.map((row) => row.map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n');
+  const csv = encodeCsv(rows);
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;

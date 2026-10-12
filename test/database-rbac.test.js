@@ -20,6 +20,8 @@ const oversellProposal = '10000000-0000-4000-8000-000000000005';
 const group1PendingProposal = '10000000-0000-4000-8000-000000000006';
 const group2Proposal = '10000000-0000-4000-8000-000000000007';
 const group3Proposal = '10000000-0000-4000-8000-000000000008';
+const crossGroupReviewProposal = '10000000-0000-4000-8000-000000000009';
+const crossGroupExecuteProposal = '10000000-0000-4000-8000-000000000010';
 
 test('Supabase migration preserves Owner, Manager, Intern, and Quant permission boundaries', async () => {
   const db = new PGlite();
@@ -77,12 +79,26 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       users,
     );
 
+    // Reproduce a legacy cross-group assignment from before group validation.
+    await db.query(`insert into public.club_team_managers(team_code,manager_id,assigned_by) values
+      ('GROUP-1',$1,$3),('GROUP-2',$2,$3)`, [managerSecond, manager, owner]);
+    await db.query(`insert into public.club_team_members(user_id,team_code,assigned_by) values($1,'GROUP-2',$2)`, [internOther, owner]);
+    await db.query(`insert into public.portfolio_assignments(portfolio_owner_id,manager_id,assigned_by)
+      values($1,$2,$3)`, [internOther, managerSecond, owner]);
+    const accessMigration = await readFile(new URL('supabase/migrations/202610140001_group_access_and_guest_limits.sql', root), 'utf8');
+    await db.exec(accessMigration);
+    await db.exec(accessMigration);
+    assert.deepEqual((await db.query(`select portfolio_owner_id,manager_id from public.portfolio_assignments
+      where portfolio_owner_id=$1`, [internOther])).rows, [], 'migration removes a legacy cross-group assignment');
+    assert.equal((await db.query(`select count(*)::int as count from public.audit_log
+      where action='portfolio.assignment_removed_by_migration' and target_user_id=$1`, [internOther])).rows[0].count, 1);
+
     await asUser(owner, async () => {
       const { rows } = await db.query(`select team_code,team_name,active,member_count,manager_ids
         from public.list_admin_teams() where team_code like 'GROUP-%' order by team_code`);
       assert.deepEqual(rows, [
-        { team_code: 'GROUP-1', team_name: 'Group #1', active: true, member_count: 0, manager_ids: [] },
-        { team_code: 'GROUP-2', team_name: 'Group #2', active: true, member_count: 0, manager_ids: [] },
+        { team_code: 'GROUP-1', team_name: 'Group #1', active: true, member_count: 0, manager_ids: [managerSecond] },
+        { team_code: 'GROUP-2', team_name: 'Group #2', active: true, member_count: 1, manager_ids: [manager] },
         { team_code: 'GROUP-3', team_name: 'Group #3', active: true, member_count: 0, manager_ids: [] },
       ]);
       await db.query(`select public.save_club_team('GROUP-4','Group #4','Owner-created group')`);
@@ -209,8 +225,18 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     await db.query(`insert into public.proposals(id,author_id,symbol,side,quantity,thesis,risks) values
       ($1,$4,'AAPL','buy',1,'Group one follow-up thesis with clear upside and a defined catalyst','Competition may weaken the opportunity'),
       ($2,$5,'NVDA','buy',1,'Group two thesis with a specific catalyst and measured allocation','Valuation could limit the expected return'),
-      ($3,$6,'JPM','buy',1,'Group three thesis with a clear catalyst and bounded downside','Credit risk could invalidate the thesis')`,
-    [group1PendingProposal, group2Proposal, group3Proposal, internResearch, internOther, internThird]);
+      ($3,$6,'JPM','buy',1,'Group three thesis with a clear catalyst and bounded downside','Credit risk could invalidate the thesis'),
+      ($7,$5,'MSFT','buy',1,'A pending Group two thesis with a measured position and clear catalyst','A weaker outlook would invalidate the investment'),
+      ($8,$5,'AMZN','buy',1,'An approved Group two thesis with a measured position and clear catalyst','A weaker outlook would invalidate the investment')`,
+    [group1PendingProposal, group2Proposal, group3Proposal, internResearch, internOther, internThird,
+      crossGroupReviewProposal, crossGroupExecuteProposal]);
+    await asUser(manager, async () => {
+      await db.query(`select public.review_proposal($1,'approved','Approved inside Group #2')`, [crossGroupExecuteProposal]);
+    });
+    // Simulate an out-of-band stale assignment: runtime checks must still keep
+    // access within the Manager's current group.
+    await db.query(`insert into public.portfolio_assignments(portfolio_owner_id,manager_id,assigned_by)
+      values($1,$2,$3)`, [internOther, managerSecond, owner]);
     await asUser(managerSecond, async () => {
       assert.deepEqual((await db.query('select id from public.proposals order by id')).rows, [
         { id: researchProposal },
@@ -229,6 +255,15 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       await db.query(`select public.review_proposal($1,'approved','Group one follow-up')`, [group1PendingProposal]);
       await assert.rejects(db.query(`select public.review_proposal($1,'rejected','Cross-group review')`, [group2Proposal]), /outside your assigned portfolios/);
       await assert.rejects(db.query(`select public.review_proposal($1,'rejected','Cross-group review')`, [group3Proposal]), /outside your assigned portfolios/);
+      await assert.rejects(db.query(`select public.review_proposal($1,'rejected','Stale assignment')`, [crossGroupReviewProposal]), /outside your assigned portfolios/);
+      await assert.rejects(db.query(`select public.execute_proposal($1,100)`, [crossGroupExecuteProposal]), /not assigned to you/);
+      assert.deepEqual((await db.query(`select id from public.proposals where author_id=$1`, [internOther])).rows, []);
+      assert.deepEqual((await db.query(`select id from public.trades where author_id=$1`, [internOther])).rows, []);
+      assert.deepEqual((await db.query(`select user_id from public.club_team_members where user_id=$1`, [internOther])).rows, []);
+      assert.deepEqual((await db.query(`select portfolio_owner_id from public.portfolio_assignments where portfolio_owner_id=$1`, [internOther])).rows, []);
+      assert.deepEqual((await db.query(`select user_id from public.list_club_members() order by user_id`)).rows, [
+        { user_id: managerSecond }, { user_id: internResearch },
+      ]);
     });
     await assert.rejects(asUser(managerSecond, () => db.query(
       `select public.review_proposal($1,'rejected','Outside the assigned group')`, [firstProposal],
@@ -243,6 +278,10 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       await db.query(`select public.execute_proposal($1,50)`, [group2Proposal]);
       await assert.rejects(db.query(`select public.review_proposal($1,'rejected','Cross-group review')`, [researchProposal]), /outside your assigned portfolios/);
       await assert.rejects(db.query(`select public.review_proposal($1,'rejected','Cross-group review')`, [group3Proposal]), /outside your assigned portfolios/);
+    });
+    await asUser(managerSecond, async () => {
+      assert.deepEqual((await db.query(`select id from public.trades where author_id=$1`, [internOther])).rows, []);
+      assert.deepEqual((await db.query(`select id from public.proposals where author_id=$1`, [internOther])).rows, []);
     });
     await asUser(managerThird, async () => {
       assert.deepEqual((await db.query('select id from public.proposals order by id')).rows, [{ id: group3Proposal }]);
@@ -260,6 +299,7 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     });
     await asUser(internThird, async () => {
       await assert.rejects(db.query(`select public.set_member_role($1,'manager')`, [internThird]), /Owner access required/);
+      await assert.rejects(db.query(`select public.review_proposal($1,'approved','Intern cannot approve')`, [group1PendingProposal]), /Proposal review permission required/);
       assert.deepEqual((await db.query('select symbol,quantity,price from public.trades')).rows, [{ symbol: 'JPM', quantity: '1', price: '75' }]);
       assert.equal((await db.query(`select 100000-sum(quantity*price) as cash from public.trades where author_id=$1`, [internThird])).rows[0].cash, '99925');
     });
@@ -277,6 +317,8 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       ]);
       assert.deepEqual((await db.query('select symbol from public.trades order by symbol')).rows, [{ symbol: 'TSLA' }]);
       await assert.rejects(db.query(`select public.execute_proposal($1,50)`, [group1PendingProposal]), /Paper-trade execution permission required/);
+      await assert.rejects(db.query(`select public.review_proposal($1,'approved','Quant cannot approve')`, [group1PendingProposal]), /Proposal review permission required/);
+      await assert.rejects(db.query(`select public.set_member_role($1,'manager')`, [quant]), /Owner access required/);
       assert.deepEqual((await db.query('select role,team from public.list_visible_portfolios() order by role')).rows, [
         { role: 'intern', team: 'GROUP-1' },
         { role: 'quant', team: 'GROUP-1' },
@@ -331,6 +373,24 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
         { action: 'paper_trade.executed', target_user_id: internThird, proposal_id: group3Proposal },
       ]);
     });
+
+    await assert.rejects(asUser(manager, () => db.query(
+      `select public.consume_market_request_budget(repeat('a',64),true,1,1,3)`,
+    )), /permission denied/);
+    await db.exec('set role service_role');
+    await db.query(`select set_config('request.jwt.claim.role','service_role',false)`);
+    try {
+      assert.equal((await db.query(`select public.consume_market_request_budget(repeat('c',64),true,0,1,3) as allowed`)).rows[0].allowed, true);
+      assert.equal((await db.query(`select public.consume_market_request_budget(repeat('c',64),true,0,1,3) as allowed`)).rows[0].allowed, false);
+      assert.equal((await db.query(`select public.consume_market_request_budget(repeat('c',64),false,0,1,3) as allowed`)).rows[0].allowed, true);
+      assert.equal((await db.query(`select public.consume_market_request_budget(repeat('a',64),true,1,1,3) as allowed`)).rows[0].allowed, true);
+      assert.equal((await db.query(`select public.consume_market_request_budget(repeat('a',64),true,1,1,3) as allowed`)).rows[0].allowed, false);
+      assert.equal((await db.query(`select public.consume_market_request_budget(repeat('b',64),true,2,1,3) as allowed`)).rows[0].allowed, true);
+      assert.equal((await db.query(`select public.consume_market_request_budget(null,false,1,1,3) as allowed`)).rows[0].allowed, false);
+    } finally {
+      await db.exec('reset role');
+    }
+    assert.equal((await db.query(`select request_count from public.market_request_limits where bucket_kind='global'`)).rows[0].request_count, 3);
   } finally {
     await db.close();
   }

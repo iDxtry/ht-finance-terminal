@@ -42,23 +42,10 @@ export function selectMarketBars(rawBars, maximumBars, newestFirst = false) {
   return newestFirst ? selected.reverse() : selected;
 }
 
-export function createGuestRateLimiter({ maxRequests = GUEST_MARKET_LIMITS.requestsPerMinute, windowMs = 60_000 } = {}) {
-  const requests = new Map();
-  return (key, now = Date.now()) => {
-    const bucketKey = key || 'unknown';
-    const windowStart = Math.floor(now / windowMs) * windowMs;
-    const current = requests.get(bucketKey);
-    if (!current || current.windowStart !== windowStart) {
-      requests.set(bucketKey, { windowStart, count: 1 });
-      if (requests.size > 10_000) {
-        for (const [entryKey, entry] of requests) {
-          if (entry.windowStart + windowMs <= now) requests.delete(entryKey);
-        }
-      }
-      return true;
-    }
-    if (current.count >= maxRequests) return false;
-    current.count += 1;
-    return true;
-  };
+export async function hashMarketClientKey(clientAddress) {
+  const address = typeof clientAddress === 'string' && clientAddress.trim()
+    ? clientAddress.trim().slice(0, 128)
+    : 'unknown';
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(address));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }

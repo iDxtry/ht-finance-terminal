@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { generateTrainingBars, trainingSnapshot, trainingSnapshots } from '../src/services/training-market.js';
 import { cleanSymbol, findInstruments, INSTRUMENTS } from '../src/data/universe.js';
 import {
-  createGuestRateLimiter,
+  hashMarketClientKey,
   getSupabaseClientKeys,
   GUEST_MARKET_LIMITS,
   isPublicMarketSymbol,
   isPublicSupabaseToken,
   PUBLIC_MARKET_SYMBOLS,
 } from '../supabase/functions/_shared/market-access.js';
+import { marketBarsCacheKey, marketSnapshotCacheKey } from '../supabase/functions/_shared/market-cache.js';
 import { clearMarketCache, loadBars, loadSnapshots, MarketDataError } from '../src/services/market-data.js';
 
 function publicMarketClient(response, userId = null) {
@@ -71,13 +72,45 @@ test('guest market coverage matches the app instrument universe', () => {
   assert.equal(isPublicSupabaseToken('user-access-token', publishableKeys), false);
 });
 
-test('guest market requests are rate limited per client and reset each minute', () => {
-  const allow = createGuestRateLimiter({ maxRequests: 2, windowMs: 60_000 });
-  assert.equal(allow('client-a', 1_000), true);
-  assert.equal(allow('client-a', 2_000), true);
-  assert.equal(allow('client-a', 3_000), false);
-  assert.equal(allow('client-b', 3_000), true);
-  assert.equal(allow('client-a', 60_000), true);
+test('guest limiter keys are fixed-length hashes and do not expose client addresses', async () => {
+  const first = await hashMarketClientKey('203.0.113.42');
+  const second = await hashMarketClientKey('203.0.113.42');
+  const other = await hashMarketClientKey('203.0.113.43');
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(first, second);
+  assert.notEqual(first, other);
+  assert.doesNotMatch(first, /203\.0\.113/);
+});
+
+test('Edge Function snapshot cache isolates viewer access and caller-specific unavailable symbols', () => {
+  const common = { symbols: ['SPY', 'AAPL'] };
+  const memberKey = marketSnapshotCacheKey({ ...common, viewer: 'member' });
+  const guestKey = marketSnapshotCacheKey({ ...common, viewer: 'guest' });
+  const guestWithUnavailableSymbol = marketSnapshotCacheKey({
+    ...common,
+    unavailableSymbols: ['PRIVATE-TICKER'],
+    viewer: 'guest',
+  });
+  const sameGuestQueryReordered = marketSnapshotCacheKey({
+    symbols: ['AAPL', 'SPY'],
+    viewer: 'guest',
+  });
+
+  assert.notEqual(memberKey, guestKey);
+  assert.notEqual(guestKey, guestWithUnavailableSymbol);
+  assert.equal(guestKey, sameGuestQueryReordered);
+});
+
+test('Edge Function chart cache isolates guest caps from member history', () => {
+  const memberKey = marketBarsCacheKey({
+    symbol: 'SPY', timeframe: '1Day', range: '5Y', limit: 1000,
+    maximumBars: 1500, viewer: 'member',
+  });
+  const guestKey = marketBarsCacheKey({
+    symbol: 'SPY', timeframe: '1Day', range: '5Y', limit: 1000,
+    maximumBars: 1000, viewer: 'guest',
+  });
+  assert.notEqual(memberKey, guestKey);
 });
 
 test('signed-out clients can request shared IEX snapshots without a user session', async () => {
