@@ -254,7 +254,7 @@ a { color: inherit; }
 .range-track { position: relative; height: 3px; background: linear-gradient(90deg, var(--down), #58635d 50%, var(--up)); }
 .range-track i { position: absolute; top: -3px; left: var(--range-position); width: 2px; height: 9px; background: #f2f0e9; }
 .range-meter>div:last-child { display: flex; justify-content: space-between; margin-top: 8px; color: #778388; font: 7px var(--mono); }
-.market-bottom-grid { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 12px; margin-top: 12px; }
+.market-bottom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
 .market-bottom-grid .panel { align-self: start; }
 .market-bottom-grid .watch-table td, .market-bottom-grid .watch-table th { padding-top: 7px; padding-bottom: 7px; }
 .research-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .9fr); gap: 12px; align-items: start; }
