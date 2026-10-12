@@ -2,13 +2,16 @@ import { mountPriceChart } from './components/price-chart.js';
 import { DEFAULT_WATCHLIST, cleanSymbol, findInstruments, instrument } from './data/universe.js';
 import { escapeHtml as h, formatMoney, formatTime } from './lib/format.js';
 import { calculatePortfolio } from './lib/portfolio.js';
+import { buildPortfolioHistory } from './lib/portfolio-history.js';
 import { backendConfigured, supabase } from './lib/supabase.js';
 import { loadBars, loadSnapshots, MarketDataError } from './services/market-data.js';
 import { generateTrainingBars, trainingSnapshots } from './services/training-market.js';
 import { renderApplication } from './views/terminal-pages.js';
+import { backtestSmaCrossover, simulateMonteCarloGBM } from './quant/index.js';
 
 const app = document.querySelector('#app');
-const ROUTES = new Set(['overview', 'markets', 'proposals', 'portfolio', 'activity', 'manager', 'members', 'setup']);
+let watchlistSyncTimer = null;
+const ROUTES = new Set(['overview', 'markets', 'proposals', 'portfolio', 'activity', 'manager', 'members', 'quant', 'admin', 'setup']);
 const STARTING_SYMBOLS = ['SPY', 'QQQ', 'DIA', 'IWM', 'TLT', 'GLD', 'AAPL', 'NVDA'];
 const RANGE_CONFIG = {
   '1D': { interval: '5Min', count: 78 },
@@ -22,15 +25,38 @@ const RANGE_CONFIG = {
 const state = {
   user: null,
   role: 'visitor',
+  authDialogVisible: false,
+  authMode: 'sign-in',
+  authMessage: '',
+  permissions: [],
   route: 'overview',
   symbol: 'SPY',
   chartRange: '1M',
   proposalFilter: 'all',
+  tradeSearch: '',
+  tradeFilterSide: 'all',
+  tradeSort: 'newest',
   proposalSymbol: '',
   watchlist: loadWatchlist(null),
   proposals: [],
+  proposalReviews: [],
+  quantAnalyses: [],
   trades: [],
   members: [],
+  portfolioMembers: [],
+  selectedPortfolioUserId: '',
+  portfolioHistory: null,
+  portfolioHistoryUserId: '',
+  portfolioHistorySource: 'training-sim',
+  portfolioHistoryLoading: false,
+  portfolioHistoryError: '',
+  adminMembers: [],
+  auditLog: [],
+  quantResults: null,
+  quantBacktest: null,
+  quantBars: [],
+  quantHistorySource: 'Training simulation',
+  quantHistorySymbol: '',
   pendingCount: 0,
   searchOpen: false,
   searchQuery: '',
@@ -43,6 +69,7 @@ const state = {
     source: 'training-sim',
     chartSource: 'training-sim',
     quotes: new Map(),
+    marketClock: null,
     bars: [],
     asOf: null,
     error: '',
@@ -55,7 +82,12 @@ const state = {
 let chartCleanup = () => {};
 let marketRequestInFlight = false;
 let chartRequestNumber = 0;
+let portfolioHistoryRequestNumber = 0;
 let noticeTimer = null;
+
+function hasPermission(permission) {
+  return state.permissions.includes(permission);
+}
 
 function hashState() {
   const [path = '', query = ''] = location.hash.replace(/^#/, '').split('?');
@@ -97,11 +129,40 @@ function loadWatchlist(userId) {
   return [...DEFAULT_WATCHLIST];
 }
 
-function saveWatchlist() {
+function saveWatchlist({ syncRemote = true } = {}) {
   try {
     localStorage.setItem(storageKey(state.user?.id || null), JSON.stringify(state.watchlist));
   } catch {
     setNotice('Watchlist changes are active for this session but browser storage is unavailable.', 'info');
+  }
+  if (syncRemote && supabase && state.user && hasPermission('market_data.read')) {
+    clearTimeout(watchlistSyncTimer);
+    const userId = state.user.id;
+    const symbols = [...state.watchlist];
+    watchlistSyncTimer = setTimeout(async () => {
+      const { error } = await supabase.from('watchlists').upsert({
+        user_id: userId,
+        symbols,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+      if (error) setNotice('Your watchlist is saved on this device but could not sync to your account.', 'error');
+    }, 300);
+  }
+}
+
+async function loadWatchlistPreferences() {
+  if (!supabase || !state.user || !hasPermission('market_data.read')) return;
+  const userId = state.user.id;
+  const { data, error } = await supabase.from('watchlists').select('symbols').eq('user_id', userId).maybeSingle();
+  if (error) {
+    setNotice('The saved watchlist could not load; the device copy remains available.', 'error');
+    return;
+  }
+  if (data) {
+    state.watchlist = [...new Set((data.symbols || []).filter((symbol) => /^[A-Z0-9.-]{1,12}$/.test(symbol)))].slice(0, 30);
+    saveWatchlist({ syncRemote: false });
+  } else {
+    saveWatchlist();
   }
 }
 
@@ -140,6 +201,7 @@ function render() {
       readout: document.querySelector('#chart-crosshair-readout'),
     });
   }
+  if (state.authDialogVisible) document.querySelector('#auth-dialog')?.showModal();
 }
 
 function setNotice(message, type = 'info') {
@@ -163,9 +225,17 @@ function updateClock() {
   if (target) target.innerHTML = `<i class="clock-dot"></i> NY ${h(state.clock)}`;
 }
 
-async function signIn() {
+function openAuthDialog() {
+  state.authDialogVisible = true;
+  state.authMode = 'sign-in';
+  state.authMessage = '';
+  render();
+}
+
+async function signInWithGoogle() {
   if (!supabase) {
-    setNotice('Google sign-in is not configured for this build. Add the Supabase Actions variables and rebuild.', 'error');
+    state.authMessage = 'Authentication is not configured in this build. Add the public Supabase environment variables and rebuild.';
+    render();
     return;
   }
   const { error } = await supabase.auth.signInWithOAuth({
@@ -173,6 +243,64 @@ async function signIn() {
     options: { redirectTo: `${location.origin}${location.pathname}` },
   });
   if (error) setNotice(error.message, 'error');
+}
+
+async function submitEmailAuth(form) {
+  if (!supabase) {
+    state.authMessage = 'Authentication is not configured in this build.';
+    render();
+    return;
+  }
+  const values = Object.fromEntries(new FormData(form));
+  const email = String(values.email || '').trim().toLowerCase();
+  const password = String(values.password || '');
+  state.authMessage = '';
+  let error = null;
+
+  if (state.authMode === 'reset') {
+    ({ error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${location.origin}${location.pathname}`,
+    }));
+    state.authMessage = error ? error.message : 'If that email can sign in here, a password-reset link is on its way.';
+    render();
+    return;
+  }
+  if (state.authMode === 'recovery') {
+    ({ error } = await supabase.auth.updateUser({ password }));
+    if (error) {
+      state.authMessage = error.message;
+      render();
+      return;
+    }
+    state.authDialogVisible = false;
+    state.authMode = 'sign-in';
+    setNotice('Password updated. You are signed in.', 'success');
+    return;
+  }
+  if (state.authMode === 'sign-up') {
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: `${location.origin}${location.pathname}` },
+    });
+    error = signUpError;
+    if (!error && !data.session) {
+      state.authMessage = 'Check your email to confirm the account, then return here to sign in. An Owner still needs to assign your club role.';
+      render();
+      return;
+    }
+  } else {
+    ({ error } = await supabase.auth.signInWithPassword({ email, password }));
+  }
+
+  if (error) {
+    state.authMessage = error.message;
+    render();
+    return;
+  }
+  state.authDialogVisible = false;
+  state.authMessage = '';
+  render();
 }
 
 async function signOut() {
@@ -185,53 +313,91 @@ async function loadClubData() {
   state.loadError = '';
   if (!supabase || !state.user) {
     state.role = 'visitor';
+    state.permissions = [];
     state.proposals = [];
+    state.proposalReviews = [];
+    state.quantAnalyses = [];
     state.trades = [];
     state.members = [];
+    state.portfolioMembers = [];
+    state.adminMembers = [];
+    state.auditLog = [];
     state.pendingCount = 0;
     render();
     return;
   }
 
-  const memberResult = await supabase.from('members').select('role').eq('id', state.user.id).maybeSingle();
+  const memberResult = await supabase.from('members').select('role,active').eq('id', state.user.id).maybeSingle();
   if (memberResult.error) {
     state.role = 'pending';
     state.proposals = [];
+    state.proposalReviews = [];
+    state.quantAnalyses = [];
     state.trades = [];
     state.members = [];
+    state.portfolioMembers = [];
     state.pendingCount = 0;
     state.loadError = `Could not verify club access: ${memberResult.error.message}`;
     render();
     return;
   }
-  state.role = memberResult.data?.role || 'pending';
+  state.role = memberResult.data?.active ? memberResult.data.role : 'pending';
   if (state.role === 'pending') {
     state.proposals = [];
+    state.proposalReviews = [];
+    state.quantAnalyses = [];
     state.trades = [];
     state.members = [];
+    state.portfolioMembers = [];
+    state.adminMembers = [];
+    state.auditLog = [];
+    state.permissions = [];
     state.pendingCount = 0;
     render();
     return;
   }
 
-  const [proposalResult, tradeResult] = await Promise.all([
-    supabase.from('proposals').select('*').order('created_at', { ascending: false }).limit(250),
-    supabase.from('trades').select('*').order('created_at', { ascending: false }).limit(1000),
-  ]);
-  const readError = proposalResult.error || tradeResult.error;
-  if (readError) {
-    state.loadError = `The club ledger could not load: ${readError.message}`;
+  const permissionResult = await supabase.rpc('my_permissions');
+  if (permissionResult.error) {
+    state.permissions = [];
+    state.loadError = `Your access permissions could not be verified: ${permissionResult.error.message}`;
     state.proposals = [];
     state.trades = [];
     state.members = [];
+    state.portfolioMembers = [];
+    state.adminMembers = [];
+    state.auditLog = [];
+    render();
+    return;
+  }
+  state.permissions = permissionResult.data || [];
+  await loadWatchlistPreferences();
+
+  const [proposalResult, tradeResult, reviewResult, quantResult] = await Promise.all([
+    supabase.from('proposals').select('*').order('created_at', { ascending: false }).limit(250),
+    supabase.from('trades').select('*').order('created_at', { ascending: false }).limit(1000),
+    supabase.from('proposal_reviews').select('*').order('created_at', { ascending: true }).limit(1000),
+    supabase.from('quant_analyses').select('*').order('created_at', { ascending: true }).limit(1000),
+  ]);
+  const readError = proposalResult.error || tradeResult.error || reviewResult.error || quantResult.error;
+  if (readError) {
+    state.loadError = `The club ledger could not load: ${readError.message}`;
+    state.proposals = [];
+    state.proposalReviews = [];
+    state.quantAnalyses = [];
+    state.trades = [];
+    state.members = [];
+    state.portfolioMembers = [];
     render();
     return;
   }
   state.proposals = proposalResult.data || [];
+  state.proposalReviews = reviewResult.data || [];
+  state.quantAnalyses = quantResult.data || [];
   state.trades = tradeResult.data || [];
   state.pendingCount = state.proposals.filter((proposal) => proposal.status === 'pending').length;
 
-  if (state.role === 'manager') {
+  if (hasPermission('members.read')) {
     const membersResult = await supabase.rpc('list_club_members');
     if (membersResult.error) {
       state.members = [];
@@ -242,9 +408,49 @@ async function loadClubData() {
   } else {
     state.members = [];
   }
-  if (state.route === 'members' && state.role !== 'manager') setHash('overview');
-  if (state.route === 'manager' && state.role !== 'manager') setHash('overview');
+  const [authorsResult, portfolioMembersResult] = await Promise.all([
+    hasPermission('proposals.read_all') || hasPermission('proposals.read_own')
+      ? supabase.rpc('list_proposal_authors')
+      : Promise.resolve({ data: [], error: null }),
+    hasPermission('portfolios.read_own') || hasPermission('portfolios.read_assigned') || hasPermission('portfolios.read_all')
+      ? supabase.rpc('list_visible_portfolios')
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (authorsResult.error) {
+    state.loadError = `Proposal participant names could not load: ${authorsResult.error.message}`;
+  } else {
+    const knownMembers = new Set(state.members.map((member) => member.user_id));
+    state.members = [...state.members, ...(authorsResult.data || []).filter((member) => !knownMembers.has(member.user_id))];
+  }
+  if (portfolioMembersResult.error) {
+    state.portfolioMembers = [];
+    state.loadError = `Portfolio coverage could not load: ${portfolioMembersResult.error.message}`;
+  } else {
+    state.portfolioMembers = portfolioMembersResult.data || [];
+  }
+  if (hasPermission('members.manage')) {
+    const [adminMembersResult, auditResult] = await Promise.all([
+      supabase.rpc('list_admin_members'),
+      supabase.from('audit_log').select('*').order('created_at', { ascending: false }).limit(100),
+    ]);
+    state.adminMembers = adminMembersResult.error ? [] : (adminMembersResult.data || []);
+    state.auditLog = auditResult.error ? [] : (auditResult.data || []);
+    if (adminMembersResult.error) state.loadError = `Owner roster could not load: ${adminMembersResult.error.message}`;
+    else if (auditResult.error) state.loadError = `Audit history could not load: ${auditResult.error.message}`;
+  } else {
+    state.adminMembers = [];
+    state.auditLog = [];
+  }
+  if (state.route === 'members' && !hasPermission('members.read')) setHash('overview');
+  if (state.route === 'manager' && !hasPermission('proposals.review')) setHash('overview');
+  if (state.route === 'admin' && !hasPermission('members.manage')) setHash('overview');
+  if (state.route === 'quant' && !hasPermission('quant.experiments.run')) setHash('overview');
   render();
+  if (state.route === 'portfolio') {
+    const visibleIds = new Set([state.user.id, ...state.portfolioMembers.map((member) => member.user_id)]);
+    if (!visibleIds.has(state.selectedPortfolioUserId)) state.selectedPortfolioUserId = state.user.id;
+    void loadPortfolioHistory(state.selectedPortfolioUserId, { force: true, silent: true });
+  }
 }
 
 function allMarketSymbols() {
@@ -256,10 +462,12 @@ function setTrainingMarket(symbols = allMarketSymbols()) {
   state.market.source = 'training-sim';
   state.market.quotes = new Map(Object.entries(trainingSnapshots(symbols)));
   state.market.asOf = null;
+  state.market.marketClock = null;
 }
 
 async function refreshMarketData(options = {}) {
   if (marketRequestInFlight) return;
+  const previousSource = state.market.source;
   marketRequestInFlight = true;
   state.market.loading = true;
   const symbols = allMarketSymbols();
@@ -270,13 +478,19 @@ async function refreshMarketData(options = {}) {
     state.market.lastRefreshAt = Date.now();
     marketRequestInFlight = false;
     if (state.route === 'markets') await loadChartBars({ silent: true });
-    else render();
+    else {
+      render();
+      if (state.route === 'portfolio' && previousSource !== state.market.source) {
+        void loadPortfolioHistory(state.selectedPortfolioUserId || state.user?.id, { force: true, silent: true });
+      }
+    }
     return;
   }
 
   try {
     const result = await loadSnapshots(supabase, symbols);
     state.market.quotes = new Map(Object.entries(result.quotes || {}));
+    state.market.marketClock = result.marketClock || null;
     state.market.source = 'iex';
     state.market.asOf = result.receivedAt || new Date().toISOString();
     state.market.error = '';
@@ -288,7 +502,12 @@ async function refreshMarketData(options = {}) {
   state.market.lastRefreshAt = Date.now();
   marketRequestInFlight = false;
   if (state.route === 'markets') await loadChartBars({ silent: true });
-  else render();
+  else {
+    render();
+    if (state.route === 'portfolio' && previousSource !== state.market.source) {
+      void loadPortfolioHistory(state.selectedPortfolioUserId || state.user?.id, { force: true, silent: true });
+    }
+  }
 }
 
 async function loadChartBars(options = {}) {
@@ -318,6 +537,168 @@ async function loadChartBars(options = {}) {
   }
   state.market.loadingBars = false;
   if (state.route === 'markets') render();
+}
+
+function dailyHistoryBars(bars) {
+  return (bars || []).map((bar) => ({
+    time: bar.time,
+    date: Number.isFinite(Number(bar.time))
+      ? new Date((Number(bar.time) < 10_000_000_000 ? Number(bar.time) * 1000 : Number(bar.time))).toISOString().slice(0, 10)
+      : bar.date,
+    close: Number(bar.close),
+  }));
+}
+
+async function loadPortfolioHistory(userId = state.selectedPortfolioUserId || state.user?.id, options = {}) {
+  if (!state.user || !userId) return;
+  const visibleIds = new Set([state.user.id, ...state.portfolioMembers.map((member) => member.user_id)]);
+  if (!visibleIds.has(userId)) return;
+  if (!options.force && state.portfolioHistory && state.portfolioHistoryUserId === userId) return;
+
+  const requestNumber = ++portfolioHistoryRequestNumber;
+  state.selectedPortfolioUserId = userId;
+  state.portfolioHistoryUserId = userId;
+  state.portfolioHistoryLoading = true;
+  state.portfolioHistoryError = '';
+  if (!options.silent && state.route === 'portfolio') render();
+
+  const accountTrades = state.trades.filter((trade) => trade.author_id === userId);
+  const symbols = [...new Set(accountTrades.map((trade) => String(trade.symbol || '').trim().toUpperCase()).filter(Boolean))];
+  const requestedSymbols = [...new Set([...symbols, 'SPY'])];
+  const priceBarsBySymbol = {};
+  const failures = [];
+  const useExchangeHistory = state.market.source === 'iex' && Boolean(supabase) && hasPermission('market_data.read');
+
+  if (useExchangeHistory) {
+    state.portfolioHistorySource = 'iex';
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(6, requestedSymbols.length) }, async () => {
+      while (nextIndex < requestedSymbols.length) {
+        const symbol = requestedSymbols[nextIndex++];
+        try {
+          const result = await loadBars(supabase, symbol, '5Y');
+          priceBarsBySymbol[symbol] = dailyHistoryBars(result.bars || []);
+          if (!result.bars?.length) failures.push(`${symbol}: no daily bars returned`);
+        } catch (error) {
+          priceBarsBySymbol[symbol] = [];
+          failures.push(`${symbol}: ${error?.message || 'history unavailable'}`);
+        }
+      }
+    });
+    await Promise.all(workers);
+  } else {
+    state.portfolioHistorySource = 'training-sim';
+    for (const symbol of requestedSymbols) {
+      priceBarsBySymbol[symbol] = generateTrainingBars(symbol, 1_000, '1Day');
+    }
+  }
+
+  if (requestNumber !== portfolioHistoryRequestNumber) return;
+  state.portfolioHistory = buildPortfolioHistory({
+    trades: state.trades,
+    userId,
+    priceBarsBySymbol,
+    benchmarkBars: priceBarsBySymbol.SPY || [],
+  });
+  state.portfolioHistoryError = failures.length
+    ? `Historical feed is incomplete: ${failures.slice(0, 4).join(' · ')}${failures.length > 4 ? ` · +${failures.length - 4} more` : ''}`
+    : '';
+  state.portfolioHistoryLoading = false;
+  if (state.route === 'portfolio') render();
+}
+
+async function loadQuantHistory() {
+  const symbol = state.symbol;
+  if (state.quantHistorySymbol === symbol && state.quantBars.length) return;
+  state.quantHistorySymbol = symbol;
+  state.quantHistorySource = 'Training simulation';
+  state.quantBars = generateTrainingBars(symbol, 260, '1Day');
+  if (supabase && state.user && hasPermission('market_data.read')) {
+    try {
+      const result = await loadBars(supabase, symbol, '1Y');
+      if (!result.bars?.length) throw new Error('No historical bars returned.');
+      state.quantBars = result.bars;
+      state.quantHistorySource = 'Alpaca IEX';
+    } catch {
+      // Keep the clearly labeled deterministic training series available.
+    }
+  }
+  if (state.route === 'quant') render();
+}
+
+function alignBenchmarkBars(bars, benchmarkBars) {
+  const benchmarkByTime = new Map((benchmarkBars || []).map((bar) => [bar.time, bar]));
+  const aligned = bars.filter((bar) => benchmarkByTime.has(bar.time));
+  return {
+    bars: aligned,
+    benchmarkBars: aligned.map((bar) => benchmarkByTime.get(bar.time)),
+  };
+}
+
+function runQuantSimulation(form) {
+  if (!hasPermission('quant.experiments.run')) return setNotice('Quant experiment access required.', 'error');
+  const fields = Object.fromEntries(new FormData(form));
+  const model = {
+    initialPrice: Number(fields.initialPrice),
+    drift: Number(fields.drift) / 100,
+    volatility: Number(fields.volatility) / 100,
+    horizonYears: Number(fields.horizonYears),
+    pathCount: Number(fields.pathCount),
+    steps: Number(fields.steps),
+    seed: `${state.symbol}:${fields.initialPrice}:${fields.drift}:${fields.volatility}:${fields.horizonYears}:${fields.pathCount}:${fields.steps}`,
+  };
+  try {
+    state.quantResults = simulateMonteCarloGBM(model);
+    render();
+  } catch (error) {
+    setNotice(error?.message || 'The simulation could not run with those inputs.', 'error');
+  }
+}
+
+async function runQuantBacktest(form) {
+  if (!hasPermission('quant.experiments.run')) return setNotice('Quant experiment access required.', 'error');
+  const fields = Object.fromEntries(new FormData(form));
+  const shortWindow = Number(fields.shortWindow);
+  const longWindow = Number(fields.longWindow);
+  if (!Number.isInteger(shortWindow) || !Number.isInteger(longWindow) || shortWindow <= 0 || longWindow <= shortWindow) {
+    return setNotice('The slow moving average must be an integer greater than the fast average.', 'error');
+  }
+  await loadQuantHistory();
+  if (!state.quantBars.length) return setNotice('No bars are available for this backtest.', 'error');
+
+  let bars = state.quantBars;
+  let benchmarkBars = null;
+  let benchmarkName = `${state.symbol} buy & hold`;
+  if (state.quantHistorySource === 'Alpaca IEX' && state.symbol !== 'SPY' && supabase) {
+    try {
+      const result = await loadBars(supabase, 'SPY', '1Y');
+      const aligned = alignBenchmarkBars(bars, result.bars || []);
+      if (aligned.bars.length >= 2) {
+        bars = aligned.bars;
+        benchmarkBars = aligned.benchmarkBars;
+        benchmarkName = 'SPY benchmark';
+      }
+    } catch {
+      // Report the valid same-security buy-and-hold comparison if SPY is unavailable.
+    }
+  }
+  try {
+    const result = backtestSmaCrossover(bars, {
+      shortWindow,
+      longWindow,
+      initialCapital: 100_000,
+      benchmarkBars,
+      periodsPerYear: 252,
+    });
+    state.quantBacktest = {
+      ...result,
+      benchmarkName,
+      source: state.quantHistorySource,
+    };
+    render();
+  } catch (error) {
+    setNotice(error?.message || 'The backtest could not be completed.', 'error');
+  }
 }
 
 function navigateToSymbol(value) {
@@ -352,12 +733,16 @@ function toggleWatchlist(symbol) {
 
 function openProposal(symbol = '') {
   if (!state.user) {
-    setNotice('Sign in with Google before submitting a club proposal.', 'info');
-    void signIn();
+    setNotice('Sign in before submitting a club proposal.', 'info');
+    openAuthDialog();
     return;
   }
   if (state.role === 'pending') {
     setNotice('A manager must activate your club membership before you can submit a thesis.', 'error');
+    return;
+  }
+  if (!hasPermission('proposals.create')) {
+    setNotice('Your club role does not have proposal-submission permission.', 'error');
     return;
   }
   state.proposalSymbol = symbol || state.symbol;
@@ -369,7 +754,7 @@ function openProposal(symbol = '') {
 }
 
 async function submitProposal(form) {
-  if (!supabase || !state.user || !['intern', 'manager'].includes(state.role)) {
+  if (!supabase || !state.user || !hasPermission('proposals.create')) {
     setNotice('An active club role is required to submit a proposal.', 'error');
     return;
   }
@@ -385,6 +770,39 @@ async function submitProposal(form) {
     setNotice('Enter a positive share quantity.', 'error');
     return;
   }
+  for (const field of ['entry_price', 'target_price', 'stop_loss']) {
+    fields[field] = Number(fields[field]);
+    if (!Number.isFinite(fields[field]) || fields[field] <= 0 || fields[field] >= 100_000_000) {
+      setNotice('Enter a valid entry price, target price, and stop-loss.', 'error');
+      return;
+    }
+  }
+  fields.allocation_pct = fields.allocation_pct ? Number(fields.allocation_pct) : null;
+  if (fields.allocation_pct !== null && (!Number.isFinite(fields.allocation_pct) || fields.allocation_pct <= 0 || fields.allocation_pct > 100)) {
+    setNotice('Allocation must be between 0 and 100 percent.', 'error');
+    return;
+  }
+  if (fields.side === 'buy' && !(fields.stop_loss < fields.entry_price && fields.entry_price < fields.target_price)) {
+    setNotice('For a buy thesis, stop-loss must be below entry and target above entry.', 'error');
+    return;
+  }
+  if (fields.side === 'sell' && !(fields.target_price < fields.entry_price && fields.entry_price < fields.stop_loss)) {
+    setNotice('For a sell thesis, target must be below entry and stop-loss above entry.', 'error');
+    return;
+  }
+  const researchUrl = String(fields.research_url || '').trim();
+  if (researchUrl) {
+    try {
+      const parsedUrl = new URL(researchUrl);
+      if (parsedUrl.protocol !== 'https:') throw new Error('HTTPS is required.');
+      fields.research_url = parsedUrl.toString();
+    } catch {
+      setNotice('Use a valid HTTPS link for supporting research.', 'error');
+      return;
+    }
+  } else {
+    fields.research_url = null;
+  }
   if (String(fields.thesis || '').trim().length < 20 || !String(fields.risks || '').trim()) {
     setNotice('Write a thesis of at least 20 characters and name one material risk.', 'error');
     return;
@@ -395,6 +813,12 @@ async function submitProposal(form) {
     symbol: fields.symbol,
     side: fields.side,
     quantity: fields.quantity,
+    entry_price: fields.entry_price,
+    target_price: fields.target_price,
+    stop_loss: fields.stop_loss,
+    time_horizon: fields.time_horizon,
+    allocation_pct: fields.allocation_pct,
+    research_url: fields.research_url,
     thesis: String(fields.thesis).trim(),
     risks: String(fields.risks).trim(),
     author_id: state.user.id,
@@ -410,16 +834,59 @@ async function submitProposal(form) {
   setNotice('Thesis submitted to the manager review queue.', 'success');
 }
 
-async function reviewProposal(proposalId, decision) {
-  if (!supabase || state.role !== 'manager') return setNotice('Manager access required.', 'error');
-  const { error } = await supabase.rpc('review_proposal', { proposal_id: proposalId, decision });
+async function reviewProposal(form, decision) {
+  if (!supabase || !hasPermission('proposals.review')) return setNotice('Proposal-review permission required.', 'error');
+  const values = Object.fromEntries(new FormData(form));
+  const proposalId = form.dataset.proposal;
+  const { error } = await supabase.rpc('review_proposal', {
+    proposal_id: proposalId,
+    decision,
+    manager_comment: String(values.manager_comment || '').trim(),
+  });
   if (error) return setNotice(error.message, 'error');
   await loadClubData();
   setNotice(`Proposal ${decision}.`, 'success');
 }
 
+async function overrideProposal(form) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const values = Object.fromEntries(new FormData(form));
+  const decision = String(values.decision || '');
+  if (!['approved', 'rejected'].includes(decision)) return setNotice('Choose an Owner override decision.', 'error');
+  const { error } = await supabase.rpc('override_proposal', {
+    proposal_id: form.dataset.proposal,
+    decision,
+    manager_comment: String(values.manager_comment || '').trim(),
+  });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice(`Owner override set the proposal to ${decision}.`, 'success');
+}
+
+async function addQuantAnalysis(form) {
+  if (!supabase || !hasPermission('quant.research.write')) return setNotice('Quant research permission required.', 'error');
+  const fields = Object.fromEntries(new FormData(form));
+  const metrics = {};
+  for (const [field, label] of [['annual_volatility_pct', 'annual volatility'], ['max_drawdown_pct', 'maximum drawdown'], ['var_95_pct', '95% VaR']]) {
+    if (fields[field] === '') continue;
+    const value = Number(fields[field]);
+    if (!Number.isFinite(value) || value < 0 || value > 1000) return setNotice(`Enter a valid ${label} percentage.`, 'error');
+    metrics[field] = value;
+  }
+  const { error } = await supabase.rpc('add_quant_analysis', {
+    proposal_id: form.dataset.proposal,
+    recommendation: fields.recommendation,
+    summary: String(fields.summary || '').trim(),
+    analysis_metrics: metrics,
+  });
+  if (error) return setNotice(error.message, 'error');
+  form.reset();
+  await loadClubData();
+  setNotice('Quant finding added to the proposal history.', 'success');
+}
+
 async function executeProposal(form) {
-  if (!supabase || state.role !== 'manager') return setNotice('Manager access required.', 'error');
+  if (!supabase || !hasPermission('paper_trades.execute')) return setNotice('Paper-trade execution permission required.', 'error');
   const proposalId = form.dataset.proposal;
   const fillPrice = Number(new FormData(form).get('price'));
   if (!Number.isFinite(fillPrice) || fillPrice <= 0) return setNotice('Enter a valid simulated fill price.', 'error');
@@ -435,13 +902,77 @@ async function executeProposal(form) {
 }
 
 async function assignRole(form) {
-  if (!supabase || state.role !== 'manager') return setNotice('Manager access required.', 'error');
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
   const assignedRole = new FormData(form).get('role');
   const targetUserId = form.dataset.userId;
   const { error } = await supabase.rpc('set_member_role', { target_user_id: targetUserId, assigned_role: assignedRole });
   if (error) return setNotice(error.message, 'error');
   await loadClubData();
   setNotice(`Member role updated to ${assignedRole}.`, 'success');
+}
+
+async function assignPermission(form) {
+  if (!supabase || !hasPermission('permissions.manage')) return setNotice('Owner access required.', 'error');
+  const values = Object.fromEntries(new FormData(form));
+  const { error } = await supabase.rpc('set_user_permission', {
+    target_user_id: form.dataset.userId,
+    permission_key: values.permission_key,
+    effect: values.effect,
+  });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice('Member permission updated and recorded in the audit log.', 'success');
+}
+
+async function assignPortfolioCoverage(form) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const values = new FormData(form);
+  const { error } = await supabase.rpc('set_portfolio_coverage', {
+    target_user_id: form.dataset.userId,
+    team_code: values.get('team_code'),
+    manager_user_ids: values.getAll('manager_user_ids'),
+  });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice('Team and portfolio coverage saved.', 'success');
+}
+
+async function inviteMember(form) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const values = Object.fromEntries(new FormData(form));
+  const email = String(values.email || '').trim().toLowerCase();
+  const role = String(values.role || '');
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) { submit.disabled = true; submit.textContent = 'Sending…'; }
+  const { data, error } = await supabase.functions.invoke('owner-admin', {
+    body: { action: 'invite', email, role },
+  });
+  if (submit) { submit.disabled = false; submit.textContent = 'Invite member'; }
+  if (error || !data?.ok) return setNotice(error?.message || data?.error || 'Invitation could not be sent.', 'error');
+  form.reset();
+  await loadClubData();
+  setNotice(`Invitation sent to ${email} with ${role} access.`, 'success');
+}
+
+async function bootstrapOwner() {
+  if (!supabase || !state.user) return setNotice('Sign in first to initialize Owner access.', 'error');
+  const accepted = window.confirm('Set your signed-in account as the initial Owner? The server checks the configured INITIAL_OWNER_EMAIL and allows this only before any Owner exists.');
+  if (!accepted) return;
+  const { data, error } = await supabase.functions.invoke('owner-admin', { body: { action: 'bootstrap' } });
+  if (error || !data?.ok) return setNotice(error?.message || data?.error || 'Initial Owner setup is not available.', 'error');
+  await loadClubData();
+  setNotice('This account is now the initial Owner.', 'success');
+}
+
+async function removeMember(userId) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const member = state.adminMembers.find((item) => item.user_id === userId);
+  if (!member) return;
+  if (!window.confirm(`Remove club access for ${member.email}? Existing research and paper-trade records will remain in the ledger.`)) return;
+  const { error } = await supabase.rpc('remove_member', { target_user_id: userId });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice('Club access removed; historical records were preserved.', 'success');
 }
 
 function exportTrades() {
@@ -469,7 +1000,10 @@ function onAppClick(event) {
   if (!control) return;
   const { action, symbol, range, indicator, proposal, decision, status } = control.dataset;
   switch (action) {
-    case 'signin': void signIn(); break;
+    case 'signin': openAuthDialog(); break;
+    case 'google-signin': void signInWithGoogle(); break;
+    case 'close-auth': state.authDialogVisible = false; state.authMessage = ''; render(); break;
+    case 'auth-mode': state.authMode = control.dataset.mode; state.authMessage = ''; render(); break;
     case 'signout': void signOut(); break;
     case 'dismiss-notice': state.notice = null; render(); break;
     case 'select-symbol':
@@ -478,7 +1012,6 @@ function onAppClick(event) {
     case 'remove-watch': toggleWatchlist(symbol); break;
     case 'open-proposal': openProposal(symbol || ''); break;
     case 'close-dialog': document.querySelector('#proposal-dialog')?.close(); break;
-    case 'review-proposal': void reviewProposal(proposal, decision); break;
     case 'proposal-filter': state.proposalFilter = status; render(); break;
     case 'chart-range':
       state.chartRange = range;
@@ -488,16 +1021,39 @@ function onAppClick(event) {
     case 'toggle-indicator': state[indicator] = !state[indicator]; render(); break;
     case 'retry-data': void refreshMarketData(); break;
     case 'export-trades': exportTrades(); break;
+    case 'clear-trade-filters': state.tradeSearch = ''; state.tradeFilterSide = 'all'; state.tradeSort = 'newest'; render(); break;
+    case 'bootstrap-owner': void bootstrapOwner(); break;
+    case 'remove-member': void removeMember(control.dataset.userId); break;
     default: break;
   }
 }
 
 function onAppInput(event) {
+  if (event.target.id === 'trade-filter-symbol') {
+    state.tradeSearch = event.target.value;
+    render();
+    return;
+  }
   if (event.target.id === 'command-input') {
     state.searchQuery = event.target.value;
     state.searchOpen = true;
     render();
   }
+}
+
+function onAppChange(event) {
+  if (event.target.id === 'portfolio-history-account') {
+    const userId = event.target.value;
+    const visibleIds = new Set([state.user?.id, ...state.portfolioMembers.map((member) => member.user_id)]);
+    if (!visibleIds.has(userId)) return;
+    state.selectedPortfolioUserId = userId;
+    void loadPortfolioHistory(userId, { force: true });
+    return;
+  }
+  if (event.target.id === 'trade-filter-side') state.tradeFilterSide = event.target.value;
+  else if (event.target.id === 'trade-sort') state.tradeSort = event.target.value;
+  else return;
+  render();
 }
 
 function onAppSubmit(event) {
@@ -525,14 +1081,61 @@ function onAppSubmit(event) {
     void submitProposal(form);
     return;
   }
+  if (form.dataset.form === 'email-auth') {
+    event.preventDefault();
+    void submitEmailAuth(form);
+    return;
+  }
   if (form.dataset.form === 'execute') {
     event.preventDefault();
     void executeProposal(form);
     return;
   }
+  if (form.dataset.form === 'proposal-review') {
+    event.preventDefault();
+    const decision = event.submitter?.value;
+    if (!['approved', 'rejected'].includes(decision)) return setNotice('Choose approve or reject.', 'error');
+    void reviewProposal(form, decision);
+    return;
+  }
+  if (form.dataset.form === 'proposal-override') {
+    event.preventDefault();
+    void overrideProposal(form);
+    return;
+  }
+  if (form.dataset.form === 'quant-analysis') {
+    event.preventDefault();
+    void addQuantAnalysis(form);
+    return;
+  }
   if (form.dataset.form === 'member-role') {
     event.preventDefault();
     void assignRole(form);
+    return;
+  }
+  if (form.dataset.form === 'member-permission') {
+    event.preventDefault();
+    void assignPermission(form);
+    return;
+  }
+  if (form.dataset.form === 'portfolio-coverage') {
+    event.preventDefault();
+    void assignPortfolioCoverage(form);
+    return;
+  }
+  if (form.dataset.form === 'owner-invite') {
+    event.preventDefault();
+    void inviteMember(form);
+    return;
+  }
+  if (form.dataset.form === 'quant-simulation') {
+    event.preventDefault();
+    runQuantSimulation(form);
+    return;
+  }
+  if (form.dataset.form === 'quant-backtest') {
+    event.preventDefault();
+    void runQuantBacktest(form);
   }
 }
 
@@ -546,6 +1149,12 @@ function onHashChange() {
   render();
   if (state.route === 'markets' && (oldRoute !== 'markets' || oldSymbol !== state.symbol || oldRange !== state.chartRange)) {
     void loadChartBars();
+  }
+  if (state.route === 'quant' && (oldRoute !== 'quant' || oldSymbol !== state.symbol)) {
+    void loadQuantHistory();
+  }
+  if (state.route === 'portfolio' && oldRoute !== 'portfolio') {
+    void loadPortfolioHistory(state.selectedPortfolioUserId || state.user?.id, { force: true, silent: true });
   }
 }
 
@@ -569,7 +1178,14 @@ async function initialize() {
   render();
   app.addEventListener('click', onAppClick);
   app.addEventListener('input', onAppInput);
+  app.addEventListener('change', onAppChange);
   app.addEventListener('submit', onAppSubmit);
+  app.addEventListener('cancel', (event) => {
+    if (event.target?.id === 'auth-dialog') {
+      state.authDialogVisible = false;
+      state.authMessage = '';
+    }
+  }, true);
   window.addEventListener('hashchange', onHashChange);
   window.addEventListener('keydown', onGlobalKeydown);
   updateClock();
@@ -591,19 +1207,35 @@ async function initialize() {
   if (state.user) state.watchlist = loadWatchlist(state.user.id);
   await Promise.all([loadClubData(), refreshMarketData()]);
   if (state.route === 'markets') await loadChartBars({ silent: true });
+  if (state.route === 'quant') await loadQuantHistory();
 
-  supabase.auth.onAuthStateChange((_event, session) => {
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      state.authDialogVisible = true;
+      state.authMode = 'recovery';
+      state.authMessage = '';
+    }
     const nextUser = session?.user || null;
     const changed = state.user?.id !== nextUser?.id;
     state.user = nextUser;
     if (changed) {
+      clearTimeout(watchlistSyncTimer);
+      watchlistSyncTimer = null;
+      state.permissions = [];
       state.watchlist = loadWatchlist(state.user?.id || null);
       state.market.error = '';
       state.market.source = 'training-sim';
+      state.selectedPortfolioUserId = state.user?.id || '';
+      state.portfolioHistory = null;
+      state.portfolioHistoryUserId = '';
+      state.portfolioHistoryLoading = false;
+      state.portfolioHistoryError = '';
+      portfolioHistoryRequestNumber += 1;
       setTrainingMarket(allMarketSymbols());
       render();
       void Promise.all([loadClubData(), refreshMarketData()]);
     }
+    if (event === 'PASSWORD_RECOVERY') render();
   });
 
   setInterval(() => {

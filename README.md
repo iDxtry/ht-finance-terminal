@@ -1,82 +1,85 @@
-# HT Investment Terminal
+# HT Finance Club Terminal
 
-HTIC is a browser-based research and paper-trading workspace for a student investment club. It is a modular Vite application, not an embedded dashboard. It includes an interactive in-app candlestick chart, a searchable US equity/ETF universe, a personal watchlist, a proposal review queue, manager-entered paper fills, member portfolios, a club activity ledger, member access controls, and CSV export.
+A browser-based research and paper-trading workspace for HTIG and HTQF. The source is a modular Vite application that deploys to both GitHub Pages and Vercel. It combines an interactive candlestick terminal, a searchable US equity/ETF universe, personal watchlists, student investment proposals, Manager approval and paper execution, personal average-cost portfolios, a trade ledger, Owner administration, and a Quant Lab.
 
-This application does not connect to a broker or place orders. Members submit ideas; a manager approves or rejects them; only an approved idea can be recorded as a paper fill. Supabase Postgres functions check paper-account cash and share balances when a manager records that fill.
+Every execution is simulated. The app has no brokerage connection and cannot place a real order. Prices shown without an active provider connection are synthetic training examples and are labeled as such.
 
-## Run locally
+## Run and test locally
 
 Use Node.js 22 or newer:
 
 ```sh
+cp .env.example .env.local
 npm ci
 npm run dev
 ```
 
-The app opens at the Vite local URL. Without configured Supabase credentials it runs in preview mode with clearly labeled generated training prices. These values are deterministic examples, not live or historical market data.
-
-To run the checks and production build:
+Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env.local` to enable Supabase. These are browser-visible project settings; never put a service-role key, OAuth client secret, or Alpaca secret in a `VITE_` variable.
 
 ```sh
 npm test
 npm run build
 ```
 
-## Modules
+## Supabase setup
 
-- `src/main.js` owns navigation, authentication state, forms, and interactions.
-- `src/views/terminal-pages.js` renders each terminal workspace.
-- `src/components/price-chart.js` draws candles, volume, crosshair values, and optional 20/50-period averages in the app.
-- `src/components/order-book.js` renders the labeled synthetic depth ladder; `src/lib/order-book.js` builds the stable, testable levels.
-- `src/services/market-data.js` calls the Supabase market-data function; `training-market.js` supplies the labeled preview feed.
-- `src/lib/portfolio.js` calculates personal positions, average cost, cash, and realized/unrealized P&L from manager-recorded fills.
-- `supabase/schema.sql` defines the tables, row-level security, and manager-only review/fill/member functions.
-- `supabase/functions/market-data/index.ts` validates active membership and proxies the optional Alpaca feed without exposing provider keys to the browser.
+For a new project, run `supabase/schema.sql` once in the Supabase SQL Editor. Then apply `supabase/migrations/202610110001_owner_quant_rbac.sql`. Existing club data is kept; the migration adds Owner/Manager/Intern/Quant roles, per-user permission overrides, HTIG/HTQF team and Manager coverage, private synced watchlists, an administrative audit log, proposal risk fields and review history, and append-only HTQF analyses.
 
-## Supabase and Google sign-in
-
-The app uses Google OAuth through Supabase Auth. Set the Supabase site URL to `https://ht-finance-terminal.vercel.app/` after the Vercel deployment is ready, and allow redirects from both hosts:
+Configure Supabase Auth’s Site URL and redirect allow-list for the production host. If using both deployments, allow both:
 
 ```text
-https://idxtry.github.io/ht-finance-terminal/
+https://ht-finance-terminal.vercel.app/**
+https://idxtry.github.io/ht-finance-terminal/**
 ```
 
-Keep both `https://ht-finance-terminal.vercel.app/**` and `https://idxtry.github.io/ht-finance-terminal/**` in the Supabase redirect allowlist so sign-in works from either host. The Google OAuth web-client redirect URI remains the callback shown in Supabase Auth → Providers → Google.
+Google OAuth remains available alongside email/password signup, sign-in, and password recovery. Add the Supabase callback URL shown in Auth → Providers → Google to the Google OAuth web client. Redirects from the host must also be allowed in Supabase Auth.
 
-Set the Google OAuth web-client redirect URI to the callback shown in Supabase Auth → Providers → Google. The Google consent screen may need club members added as test users while it remains in testing mode.
+### Initial Owner
 
-The project tables and role policies are in `supabase/schema.sql`. After the first manager signs in, that account can be promoted once by running `supabase/bootstrap_manager.sql` with the manager's Google email substituted in the SQL. Managers can then activate later sign-ins and assign intern/manager roles from the Members page. Pending accounts cannot read club proposals or trades. The database enforces review and execution permissions independently of the client UI.
+Deploy `supabase/functions/owner-admin` after applying the migration. In Supabase Edge Function secrets, set `INITIAL_OWNER_EMAIL` to the verified account that should become the first Owner. The function checks the signed-in account’s verified email against this server-side setting and calls a service-role-only atomic database function that refuses to create a second initial Owner. It does not trust a role or email supplied by browser form values.
+
+The signed-in Manager who matches that email can open **Members → Set up Owner** once. Afterward, invite members by email and assign Owner, Manager, Intern, or Quant from **Users & Permissions**. Existing Auth users are assigned directly; new users receive a Supabase Auth invitation. The service-role key stays in Supabase Edge Functions and is never bundled into the frontend.
+
+## Market data
+
+The terminal supports the free Alpaca IEX stock feed through `supabase/functions/market-data`. It uses server-side API keys, short-lived caching, server-side polling, source timestamps, and Alpaca’s US market-session clock. IEX is one exchange feed, not consolidated SIP coverage; prints and volume can differ from whole-market totals. There is no WebSocket stream in this version. If the service is not connected, the app switches to clearly marked deterministic training data and never presents it as a live quote.
+
+Deploy the Edge Functions after the database migration:
+
+```sh
+npx supabase functions deploy owner-admin --project-ref nftmbvwzeahcnfycdoam
+npx supabase functions deploy market-data --project-ref nftmbvwzeahcnfycdoam
+```
+
+In Supabase → Edge Functions → Secrets, add `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY` from an Alpaca paper account. Do not paste credentials into chat or commit them. Check Alpaca’s current [market data plan](https://docs.alpaca.markets/us/docs/about-market-data-api) and [market data FAQ](https://docs.alpaca.markets/us/docs/market-data-faq) for coverage and permitted use.
+
+## Roles and workflows
+
+- **Owner:** user invitations and role changes, individual capability overrides, access removal, administrative audit history, and all terminal permissions. Owners can override an earlier proposal decision before execution; the override is recorded in the review history and audit log. Database functions and RLS enforce Owner-only controls.
+- **Manager:** shared proposal review, approval/rejection comments, paper execution, active-member roster, and club ledger. Managers cannot create Owners or manage permissions.
+- **Intern:** personal proposal submission, private personal portfolio and ledger, market research, and training tools. Proposals require entry, target, stop, horizon, thesis, risks, and a simulated share quantity.
+- **Quant / HTQF:** research access, GBM/Monte Carlo experiments, historical SMA crossover testing, risk metrics, and append-only quantitative findings linked to proposals.
+
+The trade RPC serializes fills per member, enforces simulated buying power and share balances, and permits one fill per approved proposal. Portfolio holdings and cost basis are derived from the persisted fill ledger. It does not model commissions, taxes, slippage, or dividends.
+
+## Current limits
+
+The app is a student paper-trading workspace, not a brokerage. It does not yet provide a full order lifecycle, options, full-company financial statements, file uploads, saved panel layouts, daily portfolio equity history, an SPY-relative performance series, or a return-based leaderboard. The historical moving-average test and the GBM/Monte Carlo tools are educational models with the assumptions shown in the Quant Lab. Market data requires the Owner to add Alpaca API keys to Supabase; until then, synthetic training values are labeled and excluded from claims of live pricing.
 
 ## Hosting
 
-The connected Vercel project builds this repository on pushes to `main` and serves it at `https://ht-finance-terminal.vercel.app/`. The checked-in `.env.production` contains only the public Supabase project URL and browser publishable key used by the static app. Supabase row-level security protects all club data. A publishable/anon key is intended to be visible to browsers; never put a service-role key, Google client secret, or Alpaca secret in Vite variables or this repository.
+The connected Vercel project is `https://ht-finance-terminal.vercel.app/`. GitHub Pages remains available at `https://idxtry.github.io/ht-finance-terminal/`; `.github/workflows/deploy.yml` builds `dist/` after a push to `main`. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as GitHub Actions variables when rebuilding Pages. `.env.production` currently contains only the public Supabase URL and publishable key.
 
-GitHub Pages remains available as a fallback. Its workflow in `.github/workflows/deploy.yml` builds and deploys `dist/` on a push to `main`. If rebuilding Pages in another fork, add these repository Actions variables under Settings → Secrets and variables → Actions → Variables:
+## Source layout and open source
 
-- `VITE_SUPABASE_URL`: the Supabase project URL.
-- `VITE_SUPABASE_ANON_KEY`: the public anon/publishable key.
+- `src/main.js` handles routes, authentication, and interactions.
+- `src/views/terminal-pages.js` renders the terminal workspaces.
+- `src/components/price-chart.js` renders candlesticks, volume, crosshair values, and moving averages with TradingView Lightweight Charts.
+- `src/lib/portfolio.js` derives personal positions, average cost, cash, and realized/unrealized P&L from paper fills.
+- `src/quant/` contains seeded GBM/Monte Carlo, metrics, and no-look-ahead SMA backtesting.
+- `supabase/schema.sql` is the initial database schema; `supabase/migrations/` contains incremental changes.
+- `supabase/functions/` contains server-side market-data and Owner administration endpoints.
 
-Then push to `main` or run **Deploy terminal** from Actions.
+The chart library is Apache-2.0 licensed; the app includes its license and required attribution. The synthetic depth ladder adapts an MIT-licensed public example with its notice in `third-party/`. See `THIRD_PARTY_NOTICES.md`.
 
-## Optional free market feed
-
-The default preview is synthetic. For exchange data, the terminal supports Alpaca's free IEX stock feed. Alpaca's free plan supplies IEX data rather than consolidated SIP coverage, so prints and volume may differ from the whole US market. Create a free Alpaca paper account and use its API key pair for the data feed; this app still sends no broker orders. Check Alpaca's current [market data plan details](https://docs.alpaca.markets/us/docs/about-market-data-api) and [market data FAQ](https://docs.alpaca.markets/us/docs/market-data-faq).
-
-Deploy the server-side function to the Supabase project and set the two keys in Supabase Edge Function secrets:
-
-```sh
-npx supabase functions deploy market-data --project-ref nftmbvwzeahcnfycdoam
-npx supabase secrets set ALPACA_API_KEY_ID=your_key_id ALPACA_API_SECRET_KEY=your_secret --project-ref nftmbvwzeahcnfycdoam
-```
-
-Alternatively, add those same names under Supabase → Edge Functions → Secrets. Do not paste key values into chat or commit them. After the function and secrets are in place, a signed-in, active club member can use **Feed setup → Test connection**. Visitors and pending accounts keep the synthetic preview feed. If the feed is unconfigured or fails, the interface labels its fallback as training simulation.
-
-## Open-source components and references
-
-The chart uses [TradingView Lightweight Charts](https://tradingview.github.io/lightweight-charts/), an Apache-2.0 library, rendered directly in the application. Its license is included at `third-party/lightweight-charts-LICENSE.txt`; the app displays the required TradingView copyright and link. The synthetic depth ladder adapts the tested model from [maddoxk/frontend-trading-dashboard](https://github.com/maddoxk/frontend-trading-dashboard), under MIT; its full notice is included in `third-party/frontend-trading-dashboard-LICENSE.txt`.
-
-I also reviewed [OpenTerminal](https://github.com/ErTasselli/OpenTerminal), an MIT-licensed desktop terminal with command-driven navigation. Its provider integrations use a mix of public and reverse-engineered endpoints; this app does not copy or rely on those feeds. Lovable's [GitHub guide](https://docs.lovable.dev/integrations/github) documents syncing projects users own, rather than a shared source-code library.
-
-## Paper-account model
-
-Each activated member starts with $100,000 in simulated cash. Buys and sells are attributed to the proposal's author, while the manager who records each fill is retained in the ledger. Fill recording is serialized per member account, checks available cash and held shares, and can happen once per approved proposal. The portfolio uses average-cost accounting and current selected-feed marks when available; without a connected feed it shows fill-based positions and labels the quote feed as training simulation. There is no brokerage integration, order routing, commission, slippage, or tax model.
+The club presentation describes HTIG’s practical investment pitches and debate, and HTQF’s math, coding, simulation, and risk work. The app uses those descriptions to shape separate proposal/review and Quant workflows; the PDF itself is contextual material, not an application instruction source.

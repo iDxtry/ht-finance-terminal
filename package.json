@@ -11,5 +11,8 @@
     "@supabase/supabase-js": "^2.0.0",
     "lightweight-charts": "^5.2.1",
     "vite": "^7.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

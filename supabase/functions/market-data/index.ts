@@ -9,10 +9,35 @@ const corsHeaders = {
 };
 
 const allowedOrigins = new Set([
+  'https://ht-finance-terminal.vercel.app',
   'https://idxtry.github.io',
   'http://127.0.0.1:5173',
   'http://localhost:5173',
 ]);
+
+// Edge isolates are short-lived, but even a small cache absorbs duplicate chart
+// and watchlist refreshes while users move between terminal workspaces.
+const responseCache = new Map<string, { expiresAt: number; body: unknown }>();
+
+function cachedResponse(key: string, ttlMs: number, origin: string) {
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    responseCache.delete(key);
+    return null;
+  }
+  return response(entry.body, 200, origin);
+}
+
+function cacheResponse(key: string, ttlMs: number, body: unknown, origin: string) {
+  if (responseCache.size > 200) {
+    for (const [cacheKey, entry] of responseCache) {
+      if (entry.expiresAt <= Date.now() || responseCache.size > 150) responseCache.delete(cacheKey);
+    }
+  }
+  responseCache.set(key, { expiresAt: Date.now() + ttlMs, body });
+  return response(body, 200, origin);
+}
 
 function response(body: unknown, status: number, origin: string) {
   return new Response(JSON.stringify(body), {
@@ -52,13 +77,11 @@ Deno.serve(async (request) => {
   if (userError || !userData.user) {
     return response({ ok: false, error: 'Your session expired. Sign in again to load market data.' }, 401, origin);
   }
-  const { data: member, error: memberError } = await supabase
-    .from('members')
-    .select('role')
-    .eq('id', userData.user.id)
-    .maybeSingle();
-  if (memberError || !member || !['intern', 'manager'].includes(member.role)) {
-    return response({ ok: false, error: 'A manager must activate your club membership before market data is available.' }, 403, origin);
+  const { data: mayReadMarket, error: permissionError } = await supabase.rpc('has_permission', {
+    permission_key: 'market_data.read',
+  });
+  if (permissionError || mayReadMarket !== true) {
+    return response({ ok: false, error: 'An active club membership is required to load market data.' }, 403, origin);
   }
 
   const keyId = Deno.env.get('ALPACA_API_KEY_ID');
@@ -82,6 +105,9 @@ Deno.serve(async (request) => {
       if (!symbols.length || symbols.length > 40 || !symbols.every(validSymbol)) {
         return response({ ok: false, error: 'Choose between 1 and 40 valid US stock or ETF symbols.' }, 400, origin);
       }
+      const cacheKey = `snapshots:${symbols.sort().join(',')}`;
+      const cached = cachedResponse(cacheKey, 15_000, origin);
+      if (cached) return cached;
       const url = new URL('https://data.alpaca.markets/v2/stocks/snapshots');
       url.searchParams.set('symbols', symbols.join(','));
       url.searchParams.set('feed', 'iex');
@@ -113,7 +139,32 @@ Deno.serve(async (request) => {
           feed: 'iex',
         }];
       }));
-      return response({ ok: true, feed: 'iex', quotes, receivedAt: new Date().toISOString() }, 200, origin);
+      let marketClock = null;
+      try {
+        const clockResponse = await fetch('https://paper-api.alpaca.markets/v2/clock', {
+          headers,
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (clockResponse.ok) {
+          const clock = await clockResponse.json();
+          marketClock = {
+            isOpen: Boolean(clock.is_open),
+            timestamp: clock.timestamp || null,
+            nextOpen: clock.next_open || null,
+            nextClose: clock.next_close || null,
+            timeZone: 'America/New_York',
+          };
+        }
+      } catch {
+        // Quote data remains useful when the optional market clock is unavailable.
+      }
+      return cacheResponse(cacheKey, 15_000, {
+        ok: true,
+        feed: 'iex',
+        quotes,
+        marketClock,
+        receivedAt: new Date().toISOString(),
+      }, origin);
     }
 
     if (input.action === 'bars') {
@@ -125,6 +176,9 @@ Deno.serve(async (request) => {
       if (!['1Min', '5Min', '15Min', '1Hour', '1Day'].includes(timeframe)) {
         return response({ ok: false, error: 'Choose a supported chart interval.' }, 400, origin);
       }
+      const cacheKey = `bars:${symbol}:${timeframe}:${range}:${limit}`;
+      const cached = cachedResponse(cacheKey, 60_000, origin);
+      if (cached) return cached;
       const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
       url.searchParams.set('timeframe', timeframe);
       url.searchParams.set('limit', String(limit));
@@ -144,7 +198,14 @@ Deno.serve(async (request) => {
         close: Number(bar.c),
         volume: Number(bar.v),
       })).filter((bar: any) => Number.isFinite(bar.time) && Number.isFinite(bar.close));
-      return response({ ok: true, symbol, timeframe, feed: 'iex', bars, receivedAt: new Date().toISOString() }, 200, origin);
+      return cacheResponse(cacheKey, 60_000, {
+        ok: true,
+        symbol,
+        timeframe,
+        feed: 'iex',
+        bars,
+        receivedAt: new Date().toISOString(),
+      }, origin);
     }
 
     return response({ ok: false, error: 'Unknown market-data action.' }, 400, origin);
@@ -154,14 +215,6 @@ Deno.serve(async (request) => {
 });
 
 async function providerError(upstream: Response, origin: string) {
-  const raw = await upstream.text();
-  let detail = raw;
-  try {
-    const parsed = JSON.parse(raw);
-    detail = parsed.message || parsed.error || raw;
-  } catch {
-    // Keep the plain provider response for diagnostics.
-  }
   const status = upstream.status === 401 || upstream.status === 403 ? 502 : upstream.status;
-  return response({ ok: false, error: `Alpaca market data (${upstream.status}): ${detail}` }, status, origin);
+  return response({ ok: false, error: `Alpaca IEX returned HTTP ${upstream.status}. Try again shortly or check feed setup.` }, status, origin);
 }
