@@ -122,7 +122,7 @@ Deno.serve(async (request) => {
   const keyId = Deno.env.get('ALPACA_API_KEY_ID');
   const keySecret = Deno.env.get('ALPACA_API_SECRET_KEY');
   if (!keyId || !keySecret) {
-    return response({ ok: false, code: 'FEED_NOT_CONFIGURED', error: 'Alpaca IEX keys are not connected. Open Setup for the free feed instructions.' }, 503, origin);
+    return response({ ok: false, code: 'FEED_NOT_CONFIGURED', error: 'The shared Alpaca IEX connection is not configured. Contact a club administrator.' }, 503, origin);
   }
 
   let input: Record<string, unknown>;
@@ -161,7 +161,7 @@ Deno.serve(async (request) => {
       const upstream = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
       if (!upstream.ok) return providerError(upstream, origin);
       const payload = await upstream.json();
-      const quotes = Object.fromEntries(Object.entries(payload).map(([symbol, snapshot]: [string, any]) => {
+      const quotes = Object.fromEntries(Object.entries(payload).flatMap(([symbol, snapshot]: [string, any]) => {
         const trade = snapshot.latestTrade || {};
         const daily = snapshot.dailyBar || {};
         const previous = snapshot.prevDailyBar || {};
@@ -170,7 +170,8 @@ Deno.serve(async (request) => {
         const previousClose = Number(previous.c || 0);
         const change = previousClose ? price - previousClose : 0;
         const timestamp = trade.t || daily.t || null;
-        return [symbol, {
+        if (!Number.isFinite(price) || price <= 0 || !timestamp) return [];
+        return [[symbol, {
           symbol,
           price,
           change,
@@ -184,7 +185,7 @@ Deno.serve(async (request) => {
           ask: Number(quote.ap || 0),
           timestamp,
           feed: 'iex',
-        }];
+        }]];
       }));
       let marketClock = null;
       try {
