@@ -236,7 +236,9 @@ Deno.serve(async (request) => {
       url.searchParams.set('timeframe', timeframe);
       url.searchParams.set('limit', String(limit));
       url.searchParams.set('feed', 'iex');
-      url.searchParams.set('sort', 'asc');
+      // Guests are capped to one page of bars; descending upstream order ensures
+      // that a long-range chart receives the most recent bars within that cap.
+      url.searchParams.set('sort', isPublicViewer ? 'desc' : 'asc');
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());
       const maximumBars = range === '5Y' && timeframe === '1Day' && !isPublicViewer ? 1500 : limit;
@@ -255,7 +257,9 @@ Deno.serve(async (request) => {
           : null;
         if (!pageToken || !pageBars.length) break;
       }
-      const bars = rawBars.slice(0, maximumBars).map((bar: any) => ({
+      const selectedBars = rawBars.slice(0, maximumBars);
+      if (isPublicViewer) selectedBars.reverse();
+      const bars = selectedBars.map((bar: any) => ({
         time: Math.floor(new Date(bar.t).getTime() / 1000),
         open: Number(bar.o),
         high: Number(bar.h),
