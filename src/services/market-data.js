@@ -181,16 +181,30 @@ async function requestMarketData(supabase, body, cacheKey) {
   // Invoking this function does not require a member login for its public IEX
   // research symbols; the server applies guest limits and origin checks.
   const pending = (async () => {
-    const { data, error } = await supabase.functions.invoke('market-data', {
+    const invoke = (token) => supabase.functions.invoke('market-data', {
       body,
       // Supabase's function client does not attach the public key as a bearer
       // token for signed-out visitors. The Edge Function requires it even
       // though gateway JWT verification is disabled. Preserve a member's JWT
       // when present so server-side market permissions still apply.
-      headers: scope.authorizationToken
-        ? { Authorization: `Bearer ${scope.authorizationToken}` }
+      headers: token
+        ? { Authorization: `Bearer ${token}` }
         : undefined,
     });
+    let result = await invoke(scope.authorizationToken);
+    if (result.error
+      && result.error.context?.status === 401
+      && scope.authorizationToken
+      && scope.authorizationToken !== supabase.supabaseKey) {
+      const payload = await readFunctionErrorPayload(result.error);
+      if (/session expired/i.test(payload?.error || '')) {
+        // An expired member session must not make public research disappear.
+        // Retry only the same request with the public key; the Edge Function
+        // then applies its guest symbol allow-list and rate limit.
+        result = await invoke(supabase.supabaseKey);
+      }
+    }
+    const { data, error } = result;
     if (error) {
       const payload = await readFunctionErrorPayload(error);
       const failure = describeFunctionFailure(error, payload);

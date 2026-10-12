@@ -106,6 +106,56 @@ test('signed-out clients can request shared IEX snapshots without a user session
   assert.deepEqual(client.calls[0].options.headers, { Authorization: 'Bearer public-project-key' });
 });
 
+test('expired member sessions fall back to the rate-limited public market allow-list', async () => {
+  clearMarketCache();
+  const calls = [];
+  const client = {
+    supabaseKey: 'public-project-key',
+    auth: {
+      async getSession() {
+        return { data: { session: { user: { id: 'member-a' }, access_token: 'expired-member-token' } }, error: null };
+      },
+    },
+    functions: {
+      async invoke(name, options) {
+        calls.push({ name, options });
+        if (calls.length === 1) {
+          return {
+            data: null,
+            error: Object.assign(new Error('Edge Function returned a non-2xx status code'), {
+              context: new Response(JSON.stringify({
+                ok: false,
+                error: 'Your session expired. Sign in again to load market data.',
+              }), { status: 401, headers: { 'Content-Type': 'application/json' } }),
+            }),
+          };
+        }
+        return {
+          error: null,
+          data: {
+            ok: true,
+            feed: 'iex',
+            quotes: {
+              SPY: {
+                symbol: 'SPY', price: 592.25, change: 1.25, changePercent: 0.21,
+                open: 591, high: 593, low: 590, previousClose: 591,
+                volume: 100, bid: 592.2, ask: 592.3, timestamp: '2026-10-12T15:00:00Z', feed: 'iex',
+              },
+            },
+            receivedAt: '2026-10-12T15:00:01Z',
+          },
+        };
+      },
+    },
+  };
+
+  const result = await loadSnapshots(client, ['SPY']);
+  assert.equal(result.quotes.SPY.price, 592.25);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].options.headers, { Authorization: 'Bearer expired-member-token' });
+  assert.deepEqual(calls[1].options.headers, { Authorization: 'Bearer public-project-key' });
+});
+
 test('large guest watchlists are split into guest-safe requests and combined with timestamps', async () => {
   clearMarketCache();
   const timestamp = '2026-10-12T15:00:00Z';
