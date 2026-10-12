@@ -8,6 +8,7 @@ import { loadBars, loadSnapshots, MarketDataError } from './services/market-data
 import { generateTrainingBars, trainingSnapshots } from './services/training-market.js';
 import { renderApplication } from './views/terminal-pages.js';
 import { backtestSmaCrossover, simulateMonteCarloGBM } from './quant/index.js';
+import { isPublicMarketSymbol } from '../supabase/functions/_shared/market-access.js';
 
 const app = document.querySelector('#app');
 let watchlistSyncTimer = null;
@@ -466,6 +467,11 @@ async function loadClubData() {
 }
 
 function allMarketSymbols() {
+  if (!state.user || !hasPermission('market_data.read')) {
+    return [...new Set([state.symbol, ...STARTING_SYMBOLS, ...state.watchlist])]
+      .filter(isPublicMarketSymbol)
+      .slice(0, 12);
+  }
   const positions = state.user ? calculatePortfolio(state.trades, state.user.id).positions.map((position) => position.symbol) : [];
   return [...new Set([...STARTING_SYMBOLS, ...state.watchlist, state.symbol, ...positions])].slice(0, 40);
 }
@@ -483,9 +489,9 @@ async function refreshMarketData(options = {}) {
   marketRequestInFlight = true;
   state.market.loading = true;
   const symbols = allMarketSymbols();
-  if (!state.user || !backendConfigured) {
+  if (!backendConfigured) {
     setTrainingMarket(symbols);
-    state.market.error = !backendConfigured ? 'Supabase is not configured in this build.' : 'Sign in and activate club membership to connect the shared feed.';
+    state.market.error = 'Supabase is not configured in this build.';
     state.market.loading = false;
     state.market.lastRefreshAt = Date.now();
     marketRequestInFlight = false;
@@ -530,7 +536,7 @@ async function loadChartBars(options = {}) {
   state.market.loadingBars = true;
   if (!options.silent && state.route === 'markets') render();
 
-  if (state.market.source === 'iex' && supabase && state.role !== 'pending') {
+  if (state.market.source === 'iex' && supabase) {
     try {
       const result = await loadBars(supabase, symbol, range);
       if (requestNumber !== chartRequestNumber || symbol !== state.symbol || range !== state.chartRange) return;
@@ -724,6 +730,10 @@ function navigateToSymbol(value) {
     symbol = cleanSymbol(value);
   } catch (error) {
     setNotice(error.message, 'error');
+    return;
+  }
+  if ((!state.user || !hasPermission('market_data.read')) && !isPublicMarketSymbol(symbol)) {
+    setNotice('The guest research preview covers the listed stocks and ETFs. Sign in for expanded ticker access.', 'error');
     return;
   }
   state.searchOpen = false;
@@ -1222,7 +1232,8 @@ async function initialize() {
   }
   state.user = data?.session?.user || null;
   if (state.user) state.watchlist = loadWatchlist(state.user.id);
-  await Promise.all([loadClubData(), refreshMarketData()]);
+  await loadClubData();
+  await refreshMarketData();
   if (state.route === 'markets') await loadChartBars({ silent: true });
   if (state.route === 'quant') await loadQuantHistory();
 
@@ -1250,7 +1261,10 @@ async function initialize() {
       portfolioHistoryRequestNumber += 1;
       setTrainingMarket(allMarketSymbols());
       render();
-      void Promise.all([loadClubData(), refreshMarketData()]);
+      void (async () => {
+        await loadClubData();
+        await refreshMarketData();
+      })();
     }
     if (event === 'PASSWORD_RECOVERY') render();
   });

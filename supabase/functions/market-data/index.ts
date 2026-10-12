@@ -1,4 +1,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  createGuestRateLimiter,
+  getSupabaseClientKeys,
+  GUEST_MARKET_LIMITS,
+  isPublicMarketSymbol,
+  isPublicSupabaseToken,
+} from '../_shared/market-access.js';
 
 const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -15,6 +22,18 @@ const allowedOrigins = new Set([
   'http://localhost:5173',
 ]);
 const maxBodyBytes = 8 * 1024;
+const allowGuestRequest = createGuestRateLimiter();
+
+function isAllowedOrigin(origin: string) {
+  if (allowedOrigins.has(origin)) return true;
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:'
+      && /^ht-finance-terminal-[a-z0-9-]+-anish-batra-s-projects\.vercel\.app$/.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
 
 // Edge isolates are short-lived, but even a small cache absorbs duplicate chart
 // and watchlist refreshes while users move between terminal workspaces.
@@ -53,7 +72,7 @@ function validSymbol(value: unknown): value is string {
 
 Deno.serve(async (request) => {
   const origin = request.headers.get('Origin') || '';
-  if (!allowedOrigins.has(origin)) {
+  if (!isAllowedOrigin(origin)) {
     return new Response('Origin not allowed', { status: 403 });
   }
   if (request.method === 'OPTIONS') {
@@ -66,23 +85,38 @@ Deno.serve(async (request) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
   const authorization = request.headers.get('Authorization');
+  const apiKey = request.headers.get('apikey');
   if (!supabaseUrl || !anonKey || !authorization) {
-    return response({ ok: false, error: 'A signed-in club account is required.' }, 401, origin);
+    return response({ ok: false, error: 'The public market-data client is not configured.' }, 401, origin);
   }
 
-  const supabase = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authorization } },
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData.user) {
-    return response({ ok: false, error: 'Your session expired. Sign in again to load market data.' }, 401, origin);
+  const acceptedClientKeys = getSupabaseClientKeys(anonKey, Deno.env.get('SUPABASE_PUBLISHABLE_KEYS') || '');
+  const authorizationToken = authorization.replace(/^Bearer\s+/i, '');
+  if (!acceptedClientKeys.has(apiKey || '')) {
+    return response({ ok: false, error: 'The market-data API key is not valid for this project.' }, 401, origin);
   }
-  const { data: mayReadMarket, error: permissionError } = await supabase.rpc('has_permission', {
-    permission_key: 'market_data.read',
-  });
-  if (permissionError || mayReadMarket !== true) {
-    return response({ ok: false, error: 'An active club membership is required to load market data.' }, 403, origin);
+
+  let hasMemberMarketAccess = false;
+  if (!isPublicSupabaseToken(authorizationToken, acceptedClientKeys)) {
+    const supabase = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authorization } },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData.user) {
+      return response({ ok: false, error: 'Your session expired. Sign in again to load market data.' }, 401, origin);
+    }
+    const { data: mayReadMarket, error: permissionError } = await supabase.rpc('has_permission', {
+      permission_key: 'market_data.read',
+    });
+    hasMemberMarketAccess = !permissionError && mayReadMarket === true;
+  }
+  const isPublicViewer = !hasMemberMarketAccess;
+  if (isPublicViewer) {
+    const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'unknown';
+    if (!allowGuestRequest(clientIp)) {
+      return response({ ok: false, error: 'Guest market-data limit reached. Wait a minute and try again.' }, 429, origin);
+    }
   }
 
   const keyId = Deno.env.get('ALPACA_API_KEY_ID');
@@ -111,8 +145,12 @@ Deno.serve(async (request) => {
     if (input.action === 'snapshots') {
       const rawSymbols = Array.isArray(input.symbols) ? input.symbols : [];
       const symbols = [...new Set(rawSymbols.map((symbol) => String(symbol).toUpperCase()))];
-      if (!symbols.length || symbols.length > 40 || !symbols.every(validSymbol)) {
-        return response({ ok: false, error: 'Choose between 1 and 40 valid US stock or ETF symbols.' }, 400, origin);
+      const maxSymbols = isPublicViewer ? GUEST_MARKET_LIMITS.snapshotSymbols : 40;
+      if (!symbols.length || symbols.length > maxSymbols || !symbols.every(validSymbol)) {
+        return response({ ok: false, error: `Choose between 1 and ${maxSymbols} valid US stock or ETF symbols.` }, 400, origin);
+      }
+      if (isPublicViewer && !symbols.every(isPublicMarketSymbol)) {
+        return response({ ok: false, error: 'Guest market access covers the listed stocks and ETFs in the research preview.' }, 403, origin);
       }
       const cacheKey = `snapshots:${symbols.sort().join(',')}`;
       const cached = cachedResponse(cacheKey, 15_000, origin);
@@ -180,11 +218,17 @@ Deno.serve(async (request) => {
       const symbol = String(input.symbol || '').toUpperCase();
       const timeframe = String(input.timeframe || '1Day');
       const range = String(input.range || '1M');
-      const limit = Math.min(Math.max(Number(input.limit) || 240, 10), 1000);
+      const requestedLimit = Math.min(Math.max(Number(input.limit) || 240, 10), 1000);
+      const limit = isPublicViewer ? Math.min(requestedLimit, GUEST_MARKET_LIMITS.chartBars) : requestedLimit;
       if (!validSymbol(symbol)) return response({ ok: false, error: 'Choose a valid ticker symbol.' }, 400, origin);
+      if (isPublicViewer && !isPublicMarketSymbol(symbol)) {
+        return response({ ok: false, error: 'Guest market access covers the listed stocks and ETFs in the research preview.' }, 403, origin);
+      }
       if (!['1Min', '5Min', '15Min', '1Hour', '1Day'].includes(timeframe)) {
         return response({ ok: false, error: 'Choose a supported chart interval.' }, 400, origin);
       }
+      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840 };
+      if (!(range in lookbackDays)) return response({ ok: false, error: 'Choose a supported chart range.' }, 400, origin);
       const cacheKey = `bars:${symbol}:${timeframe}:${range}:${limit}`;
       const cached = cachedResponse(cacheKey, 60_000, origin);
       if (cached) return cached;
@@ -193,10 +237,9 @@ Deno.serve(async (request) => {
       url.searchParams.set('limit', String(limit));
       url.searchParams.set('feed', 'iex');
       url.searchParams.set('sort', 'asc');
-      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840 };
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());
-      const maximumBars = range === '5Y' && timeframe === '1Day' ? 1500 : limit;
+      const maximumBars = range === '5Y' && timeframe === '1Day' && !isPublicViewer ? 1500 : limit;
       const rawBars: any[] = [];
       let pageToken: string | null = null;
       for (let page = 0; page < 3 && rawBars.length < maximumBars; page += 1) {
