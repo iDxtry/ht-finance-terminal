@@ -27,11 +27,9 @@ export function mountPriceChart(container, bars, options = {}) {
     rightPriceScale: { borderColor: '#273036', scaleMargins: { top: 0.08, bottom: 0.27 } },
     timeScale: {
       borderColor: '#273036',
-      timeVisible: options.range === '1D' || options.range === '1W',
+      timeVisible: ['1D', '1W', '2W'].includes(options.range),
       secondsVisible: false,
       rightOffset: ['5Y', 'ALL'].includes(options.range) ? 0 : 5,
-      fixLeftEdge: ['5Y', 'ALL'].includes(options.range),
-      fixRightEdge: ['5Y', 'ALL'].includes(options.range),
     },
     localization: { priceFormatter: (price) => formatMoney(price, { digits: price < 2 ? 4 : 2 }) },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
