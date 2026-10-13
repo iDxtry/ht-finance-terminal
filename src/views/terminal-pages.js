@@ -2,6 +2,7 @@ import { calculatePortfolio } from '../lib/portfolio.js';
 import { classForChange, escapeHtml as h, formatCompact, formatMoney, formatNumber, formatPercent, formatSignedMoney, formatTime, relativeTime } from '../lib/format.js';
 import { DEFAULT_WATCHLIST, findInstruments, instrument, INSTRUMENTS } from '../data/universe.js';
 import { chartLegend } from '../components/price-chart.js';
+import { MARKET_CHART_RANGES } from '../lib/market-ranges.js';
 
 const PERMISSION_LABELS = {
   'members.read': 'Read assigned roster',
@@ -265,7 +266,7 @@ function marketsPage(state) {
     <div class="market-layout">
       <section class="panel chart-panel">
         <div class="chart-panel-head"><div><div class="eyebrow">PRICE HISTORY / ${h(state.symbol)} / ${h(state.chartRange)}</div><h2>${legend.price ? formatMoney(legend.price) : 'Price chart'} <small id="chart-crosshair-readout">Move crosshair for OHLC</small></h2></div><div class="chart-controls">
-          <div class="segmented" aria-label="Chart range">${['1D', '1W', '1M', '3M', '1Y', '5Y', 'ALL'].map((range) => `<button type="button" data-action="chart-range" data-range="${range}" class="${state.chartRange === range ? 'selected' : ''}" aria-pressed="${state.chartRange === range}">${range}</button>`).join('')}</div>
+          <div class="segmented" aria-label="Chart range">${MARKET_CHART_RANGES.map((range) => `<button type="button" data-action="chart-range" data-range="${range}" class="${state.chartRange === range ? 'selected' : ''}" aria-pressed="${state.chartRange === range}">${range}</button>`).join('')}</div>
         </div></div>
         <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><button class="indicator-toggle ${state.showSma200 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma200" aria-pressed="${state.showSma200}"><i class="indicator-dot sma200"></i>SMA 200</button></div>
         <div id="price-chart" class="price-chart" aria-label="Interactive candlestick price chart"></div>
