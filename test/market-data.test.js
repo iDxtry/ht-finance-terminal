@@ -54,6 +54,9 @@ test('200-period simple moving average uses rolling close prices', () => {
 test('market route accepts supported chart ranges from shared URLs only', () => {
   assert.equal(isMarketChartRange('5Y'), true);
   assert.equal(isMarketChartRange('1D'), true);
+  assert.equal(isMarketChartRange('2W'), true);
+  assert.equal(isMarketChartRange('6M'), true);
+  assert.equal(isMarketChartRange('2Y'), true);
   assert.equal(isMarketChartRange('10Y'), false);
   assert.equal(isMarketChartRange(null), false);
 });
@@ -207,6 +210,24 @@ test('all-history chart requests use daily bars and the largest provider page si
   assert.equal(result.bars.length, 1);
   assert.deepEqual(client.calls[0].options.body, {
     action: 'bars', symbol: 'SPY', timeframe: '1Day', limit: 10_000, range: 'ALL',
+  });
+});
+
+test('two-week chart requests use 15-minute candles with enough bars for a full trading week extension', async () => {
+  clearMarketCache();
+  const client = publicMarketClient({
+    error: null,
+    data: {
+      ok: true,
+      feed: 'iex',
+      bars: [{ time: 1_800_000_000, open: 100, high: 103, low: 99, close: 102, volume: 1000 }],
+      receivedAt: '2026-10-12T15:00:01Z',
+    },
+  });
+
+  await loadBars(client, 'SPY', '2W');
+  assert.deepEqual(client.calls[0].options.body, {
+    action: 'bars', symbol: 'SPY', timeframe: '15Min', limit: 400, range: '2W',
   });
 });
 
