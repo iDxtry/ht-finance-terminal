@@ -212,6 +212,7 @@ function render() {
     chartCleanup = mountPriceChart(document.querySelector('#price-chart'), state.market.bars, {
       quote: state.market.quotes.get(state.symbol),
       range: state.chartRange,
+      loading: state.market.loadingBars,
       showSma20: state.showSma20,
       showSma50: state.showSma50,
       showSma200: state.showSma200,
@@ -704,6 +705,7 @@ async function loadQuantHistory({ force = false } = {}) {
   state.quantHistoryError = '';
   state.quantHistoryLoading = true;
   state.quantBacktest = null;
+  if (state.route === 'quant') render();
   if (supabase && state.user && hasPermission('market_data.read')) {
     try {
       const result = await loadBars(supabase, symbol, '1Y');
@@ -1350,6 +1352,7 @@ function onGlobalKeydown(event) {
 
 async function initialize() {
   hashState();
+  if (state.route === 'markets') state.market.loadingBars = true;
   state.market.quotes = new Map();
   state.clock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
   render();

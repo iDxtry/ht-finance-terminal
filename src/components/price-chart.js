@@ -6,7 +6,9 @@ export function mountPriceChart(container, bars, options = {}) {
   if (!container) return () => {};
   container.replaceChildren();
   if (!bars?.length) {
-    container.innerHTML = '<div class="chart-empty"><span class="chart-empty-mark">CHART</span><b>No bars available</b><small>Try another range or verify the market-data connection.</small></div>';
+    container.innerHTML = options.loading
+      ? '<div class="chart-loading" role="status" aria-live="polite"><span>Loading verified IEX history</span><div class="chart-loading-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>'
+      : '<div class="chart-empty"><span class="chart-empty-mark">CHART</span><b>No bars available</b><small>Try another range or verify the market-data connection.</small></div>';
     return () => {};
   }
 

@@ -73,6 +73,7 @@ test('Owner sees one People & Teams destination for group and member administrat
   assert.match(html, /Group #1/);
   assert.match(html, /manager@example\.edu/);
   assert.match(html, /intern@example\.edu/);
+  assert.match(html, /<details class="team-admin-card /);
   assert.match(html, /data-form="team-managers"/);
   assert.match(html, /data-form="member-team"/);
   assert.doesNotMatch(html, /Users & Permissions|Feed setup|href="#setup"|Manager desk/);
@@ -88,7 +89,17 @@ test('Owner can delete only an empty group from People & Teams', () => {
 
   assert.match(html, /data-action="delete-team" data-team-code="GROUP-1" disabled/);
   assert.match(html, /data-action="delete-team" data-team-code="GROUP-2" >Delete group/);
-  assert.match(html, /Remove all group members and Managers first/);
+  assert.match(html, /Remove members and Managers first/);
+});
+
+test('group editor replaces blank manager selectors with a direct setup hint', () => {
+  const state = baseState({ route: 'admin', role: 'owner', permissions: ['members.manage'] });
+  state.adminTeams = [{ team_code: 'GROUP-1', team_name: 'Group #1', active: true, member_count: 0, manager_ids: [] }];
+  state.adminMembers = [{ user_id: 'u-owner', email: 'owner@example.edu', full_name: 'Owner', active: true, role: 'owner' }];
+  const html = renderApplication(state);
+
+  assert.match(html, /Invite or activate a Manager to assign group oversight/);
+  assert.doesNotMatch(html, /<select name="manager_user_ids"/);
 });
 
 test('market chart offers All history and SMA 200 without showing a raw bar count', () => {
@@ -123,7 +134,7 @@ test('signed-out market view renders received IEX quotes and keeps the feed labe
   const html = renderApplication(state);
 
   assert.match(html, /Shared Alpaca IEX/);
-  assert.match(html, /ALPACA IEX/);
+  assert.match(html, /Alpaca IEX/);
   assert.match(html, /\$611\.40/);
   assert.doesNotMatch(html, /Market data unavailable/);
 });
@@ -181,10 +192,24 @@ test('Research is a distinct company workspace linked to Markets charts and club
   assert.match(research, /Proposal activity/);
   assert.match(research, /href="#markets\?symbol=SPY"/);
   assert.match(markets, /id="price-chart"/);
-  assert.match(markets, /Largest moves/);
+  assert.match(markets, /PERSONAL WATCHLIST/);
+  assert.doesNotMatch(markets, /Largest moves/);
+  assert.equal((markets.match(/<table class="data-table/g) || []).length, 1);
   assert.match(markets, /href="#research\?symbol=SPY"/);
   assert.doesNotMatch(markets, /SYNTHETIC DEPTH|Generated ask levels|Illustrative market depth/);
   assert.doesNotMatch(markets, /INSTRUMENT PROFILE/);
+});
+
+test('overview omits onboarding instructions for a signed-in club member', () => {
+  const html = renderApplication(baseState({ route: 'overview', role: 'owner', permissions: ['proposals.create'] }));
+  assert.doesNotMatch(html, /Submit a written thesis|Manager reviews the risk|Manager records a paper fill/);
+  assert.doesNotMatch(html, /Investment desk\.<\/h1>/);
+});
+
+test('empty activity ledger hides controls that cannot affect any rows', () => {
+  const html = renderApplication(baseState({ route: 'activity', role: 'owner', permissions: ['paper_trades.read_all'] }));
+  assert.match(html, /No paper fills recorded\./);
+  assert.doesNotMatch(html, /trade-filter-symbol|trade-filter-side|Export CSV|>Reset</);
 });
 
 test('Portfolio displays unavailable marks and totals when an open position has no verified quote', () => {
