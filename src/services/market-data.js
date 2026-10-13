@@ -265,9 +265,9 @@ export async function loadSnapshots(supabase, symbols, options = {}) {
 
 export async function loadBars(supabase, symbol, range = '1M', options = {}) {
   const normalized = String(symbol).toUpperCase();
-  const timeframeByRange = { '1D': '5Min', '1W': '15Min', '1M': '1Hour', '3M': '1Day', '1Y': '1Day', '5Y': '1Day', ALL: '1Day' };
+  const timeframeByRange = { '1D': '5Min', '1W': '15Min', '2W': '15Min', '1M': '1Hour', '3M': '1Day', '6M': '1Day', '1Y': '1Day', '2Y': '1Day', '5Y': '1Day', ALL: '1Day' };
   const timeframe = timeframeByRange[range] || '1Day';
-  const limitByRange = { '1D': 200, '1W': 200, '1M': 240, '3M': 100, '1Y': 260, '5Y': 1000, ALL: 10_000 };
+  const limitByRange = { '1D': 200, '1W': 200, '2W': 400, '1M': 240, '3M': 100, '6M': 200, '1Y': 260, '2Y': 520, '5Y': 1000, ALL: 10_000 };
   return requestMarketData(
     supabase,
     { action: 'bars', symbol: normalized, timeframe, limit: limitByRange[range] || 240, range },
