@@ -6,6 +6,7 @@ import { buildPortfolioHistory } from './lib/portfolio-history.js';
 import { encodeCsv } from './lib/csv.js';
 import { backendConfigured, supabase } from './lib/supabase.js';
 import { loadBars, loadSnapshots, MarketDataError } from './services/market-data.js';
+import { isMarketChartRange } from './lib/market-ranges.js';
 import { renderApplication } from './views/terminal-pages.js';
 import { backtestSmaCrossover, simulateMonteCarloGBM } from './quant/index.js';
 import { isPublicMarketSymbol } from '../supabase/functions/_shared/market-access.js';
@@ -98,7 +99,7 @@ function hashState() {
   } catch {
     // An invalid link falls back to the last selected symbol.
   }
-  if (params.has('range') && RANGE_CONFIG[params.get('range')]) state.chartRange = params.get('range');
+  if (isMarketChartRange(params.get('range'))) state.chartRange = params.get('range');
   state.route = route;
 }
 
@@ -526,7 +527,7 @@ async function refreshMarketData(options = {}) {
   }
 
   try {
-    const result = await loadSnapshots(supabase, symbols);
+    const result = await loadSnapshots(supabase, symbols, { force: options.force === true });
     state.market.quotes = new Map(Object.entries(result.quotes || {}));
     state.market.marketClock = result.marketClock || null;
     state.market.source = 'iex';
@@ -543,7 +544,7 @@ async function refreshMarketData(options = {}) {
   state.market.loading = false;
   state.market.lastRefreshAt = Date.now();
   marketRequestInFlight = false;
-  if (state.route === 'markets') await loadChartBars({ silent: true });
+  if (state.route === 'markets') await loadChartBars({ silent: true, force: options.force === true });
   else {
     render();
     if (state.route === 'portfolio' && previousSource !== state.market.source) {
@@ -563,7 +564,7 @@ async function loadChartBars(options = {}) {
   state.market.chartSource = 'unavailable';
   if (supabase) {
     try {
-      const result = await loadBars(supabase, symbol, range);
+      const result = await loadBars(supabase, symbol, range, { force: options.force === true });
       if (requestNumber !== chartRequestNumber || symbol !== state.symbol || range !== state.chartRange) return;
       state.market.bars = result.bars || [];
       state.market.chartSource = 'iex';
@@ -1121,7 +1122,7 @@ function onAppClick(event) {
       void loadChartBars();
       break;
     case 'toggle-indicator': state[indicator] = !state[indicator]; render(); break;
-    case 'retry-data': void refreshMarketData(); break;
+    case 'retry-data': void refreshMarketData({ force: true }); break;
     case 'retry-quant-history': void loadQuantHistory({ force: true }); break;
     case 'export-trades': exportTrades(); break;
     case 'clear-trade-filters': state.tradeSearch = ''; state.tradeFilterSide = 'all'; state.tradeSort = 'newest'; render(); break;

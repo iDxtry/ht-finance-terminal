@@ -166,7 +166,7 @@ function describeFunctionFailure(error, payload) {
   };
 }
 
-async function requestMarketData(supabase, body, cacheKey) {
+async function requestMarketData(supabase, body, cacheKey, { force = false } = {}) {
   if (!supabase?.functions?.invoke) {
     throw new MarketDataError('Market data is unavailable because the public Supabase client is not configured in this build.', {
       code: 'CLIENT_NOT_CONFIGURED',
@@ -174,7 +174,7 @@ async function requestMarketData(supabase, body, cacheKey) {
   }
   const scope = await cacheScope(supabase);
   const scopedCacheKey = scope.key ? `${scope.key}:${cacheKey}` : null;
-  const cached = scopedCacheKey ? readCache(scopedCacheKey) : null;
+  const cached = !force && scopedCacheKey ? readCache(scopedCacheKey) : null;
   if (cached) return cached;
 
   const requestKey = scopedCacheKey ? `${scopedCacheKey}:${cacheKey}` : null;
@@ -238,7 +238,7 @@ async function requestMarketData(supabase, body, cacheKey) {
   }
 }
 
-export async function loadSnapshots(supabase, symbols) {
+export async function loadSnapshots(supabase, symbols, options = {}) {
   const list = [...new Set(symbols.map((symbol) => String(symbol).toUpperCase()))].slice(0, 40).sort();
   if (!list.length) return { feed: 'iex', quotes: {}, receivedAt: new Date().toISOString() };
   const scope = await cacheScope(supabase);
@@ -250,6 +250,7 @@ export async function loadSnapshots(supabase, symbols) {
     supabase,
     { action: 'snapshots', symbols: batch },
     `snapshots:${scope.key || 'session-unknown'}:${batch.join(',')}`,
+    options,
   )));
   const quotes = Object.assign({}, ...results.map((result) => result.quotes || {}));
   const unavailableSymbols = results.flatMap((result) => result.unavailableSymbols || []);
@@ -262,7 +263,7 @@ export async function loadSnapshots(supabase, symbols) {
   };
 }
 
-export async function loadBars(supabase, symbol, range = '1M') {
+export async function loadBars(supabase, symbol, range = '1M', options = {}) {
   const normalized = String(symbol).toUpperCase();
   const timeframeByRange = { '1D': '5Min', '1W': '15Min', '1M': '1Hour', '3M': '1Day', '1Y': '1Day', '5Y': '1Day' };
   const timeframe = timeframeByRange[range] || '1Day';
@@ -271,6 +272,7 @@ export async function loadBars(supabase, symbol, range = '1M') {
     supabase,
     { action: 'bars', symbol: normalized, timeframe, limit: limitByRange[range] || 240, range },
     `bars:${normalized}:${range}`,
+    options,
   );
 }
 

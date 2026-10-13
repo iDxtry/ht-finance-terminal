@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chartLegend } from '../src/components/price-chart.js';
 import { cleanSymbol, findInstruments, INSTRUMENTS } from '../src/data/universe.js';
+import { isMarketChartRange } from '../src/lib/market-ranges.js';
 import {
   hashMarketClientKey,
   getSupabaseClientKeys,
@@ -40,6 +41,13 @@ test('chart legend never relabels a historical candle close as the current quote
   assert.equal(legend.price, null);
   assert.equal(legend.volume, 900);
   assert.equal(legend.feed, 'unavailable');
+});
+
+test('market route accepts supported chart ranges from shared URLs only', () => {
+  assert.equal(isMarketChartRange('5Y'), true);
+  assert.equal(isMarketChartRange('1D'), true);
+  assert.equal(isMarketChartRange('10Y'), false);
+  assert.equal(isMarketChartRange(null), false);
 });
 
 test('market snapshots preserve missing provider fields as unavailable values', async () => {
@@ -142,6 +150,37 @@ test('signed-out clients can request shared IEX snapshots without a user session
   assert.equal(client.calls[0].name, 'market-data');
   assert.deepEqual(client.calls[0].options.body, { action: 'snapshots', symbols: ['SPY'] });
   assert.deepEqual(client.calls[0].options.headers, { Authorization: 'Bearer public-project-key' });
+});
+
+test('manual refresh bypasses the browser snapshot cache', async () => {
+  clearMarketCache();
+  let price = 100;
+  const client = publicMarketClient(() => {
+    const currentPrice = price;
+    return {
+      error: null,
+      data: {
+        ok: true,
+        feed: 'iex',
+        quotes: {
+          SPY: {
+            symbol: 'SPY', price: currentPrice, change: 0, changePercent: 0,
+            open: currentPrice, high: currentPrice, low: currentPrice, previousClose: currentPrice,
+            volume: 100, bid: currentPrice, ask: currentPrice,
+            timestamp: '2026-10-12T15:00:00Z', feed: 'iex',
+          },
+        },
+        receivedAt: '2026-10-12T15:00:01Z',
+      },
+    };
+  });
+
+  assert.equal((await loadSnapshots(client, ['SPY'])).quotes.SPY.price, 100);
+  price = 101;
+  assert.equal((await loadSnapshots(client, ['SPY'])).quotes.SPY.price, 100);
+  assert.equal(client.calls.length, 1);
+  assert.equal((await loadSnapshots(client, ['SPY'], { force: true })).quotes.SPY.price, 101);
+  assert.equal(client.calls.length, 2);
 });
 
 test('expired member sessions fall back to the rate-limited public market allow-list', async () => {
