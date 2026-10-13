@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   isMarketChartRange,
+  MARKET_CHART_RANGES,
   nextMarketChartRange,
   shouldExpandMarketChartRange,
 } from '../src/lib/market-ranges.js';
 
 test('chart ranges expand one step at a time and stop at all available history', () => {
-  assert.deepEqual(['1D', '1W', '1M', '3M', '1Y', '5Y'].map(nextMarketChartRange), ['1W', '1M', '3M', '1Y', '5Y', 'ALL']);
+  assert.deepEqual(MARKET_CHART_RANGES, ['1D', '1W', '2W', '1M', '3M', '6M', '1Y', '2Y', '5Y', 'ALL']);
+  assert.deepEqual(MARKET_CHART_RANGES.slice(0, -1).map(nextMarketChartRange), MARKET_CHART_RANGES.slice(1));
   assert.equal(nextMarketChartRange('ALL'), null);
   assert.equal(nextMarketChartRange('unknown'), null);
   assert.equal(isMarketChartRange('5Y'), true);
