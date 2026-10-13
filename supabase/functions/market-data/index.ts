@@ -73,6 +73,22 @@ function validSymbol(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Z][A-Z0-9.-]{0,11}$/.test(value);
 }
 
+function providerNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function positiveProviderNumber(value: unknown): number | null {
+  const number = providerNumber(value);
+  return number !== null && number > 0 ? number : null;
+}
+
+function volumeProviderNumber(value: unknown): number | null {
+  const number = providerNumber(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
 Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
   const origin = request.headers.get('Origin') || '';
   if (!isAllowedOrigin(origin)) {
@@ -213,23 +229,23 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
         const daily = snapshot.dailyBar || {};
         const previous = snapshot.prevDailyBar || {};
         const quote = snapshot.latestQuote || {};
-        const price = Number(trade.p || daily.c || 0);
-        const previousClose = Number(previous.c || 0);
-        const change = previousClose ? price - previousClose : 0;
+        const price = positiveProviderNumber(trade.p) ?? positiveProviderNumber(daily.c);
+        const previousClose = positiveProviderNumber(previous.c);
         const timestamp = trade.t || daily.t || null;
-        if (!Number.isFinite(price) || price <= 0 || !timestamp) return [];
+        if (price === null || !timestamp) return [];
+        const change = previousClose === null ? null : price - previousClose;
         return [[symbol, {
           symbol,
           price,
           change,
-          changePercent: previousClose ? (change / previousClose) * 100 : 0,
-          open: Number(daily.o || 0),
-          high: Number(daily.h || 0),
-          low: Number(daily.l || 0),
+          changePercent: previousClose !== null && change !== null ? (change / previousClose) * 100 : null,
+          open: positiveProviderNumber(daily.o),
+          high: positiveProviderNumber(daily.h),
+          low: positiveProviderNumber(daily.l),
           previousClose,
-          volume: Number(daily.v || 0),
-          bid: Number(quote.bp || 0),
-          ask: Number(quote.ap || 0),
+          volume: volumeProviderNumber(daily.v),
+          bid: positiveProviderNumber(quote.bp),
+          ask: positiveProviderNumber(quote.ap),
           timestamp,
           feed: 'iex',
         }]];

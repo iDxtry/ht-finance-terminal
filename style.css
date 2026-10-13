@@ -61,7 +61,7 @@ a { color: inherit; }
 .connection-card>a { display: flex; justify-content: space-between; color: #c4a56e; font-size: 10px; text-decoration: none; }
 .feed-dot, .detail-feed-dot { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); }
 .feed-dot.feed-live, .detail-feed-dot.feed-live { background: var(--up); box-shadow: 0 0 10px #52c3a244; }
-.feed-dot.feed-demo, .detail-feed-dot.feed-demo { background: var(--accent); }
+.feed-dot.feed-offline, .detail-feed-dot.feed-offline { background: var(--subtle); }
 .user-card { display: flex; min-width: 0; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding: 13px 2px 1px; }
 .avatar { display: grid; width: 31px; height: 31px; flex: none; place-items: center; border: 1px solid #4c5559; color: #d5d9d7; background: #20272b; font: 10px var(--mono); }
 .user-info { min-width: 0; flex: 1; }

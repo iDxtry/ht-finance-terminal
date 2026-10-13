@@ -76,7 +76,11 @@ function assertSharedIexPayload(data, request) {
     const requested = new Set(request.symbols || []);
     for (const [symbol, quote] of Object.entries(data.quotes)) {
       const price = Number(quote?.price);
-      if (!requested.has(symbol) || !isRecord(quote) || quote.feed !== 'iex' || quote.symbol !== symbol || !Number.isFinite(price) || price <= 0 || typeof quote.timestamp !== 'string' || !Number.isFinite(Date.parse(quote.timestamp))) {
+      const nullableNumbers = ['change', 'changePercent', 'open', 'high', 'low', 'previousClose', 'volume', 'bid', 'ask'];
+      const hasInvalidOptionalNumber = !isRecord(quote) || nullableNumbers.some((key) => (
+        quote[key] !== null && (typeof quote[key] !== 'number' || !Number.isFinite(quote[key]))
+      ));
+      if (!requested.has(symbol) || !isRecord(quote) || quote.feed !== 'iex' || quote.symbol !== symbol || !Number.isFinite(price) || price <= 0 || typeof quote.timestamp !== 'string' || !Number.isFinite(Date.parse(quote.timestamp)) || hasInvalidOptionalNumber || (quote.volume !== null && quote.volume < 0)) {
         throw new MarketDataError('The shared IEX service returned an invalid quote. No substitute price was used.', {
           code: 'INVALID_RESPONSE',
         });

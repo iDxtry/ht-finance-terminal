@@ -49,7 +49,7 @@ export function mountPriceChart(container, bars, options = {}) {
     priceLineVisible: false,
   });
   chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0.01 }, borderVisible: false });
-  volumeSeries.setData(candles.map((bar) => ({
+  volumeSeries.setData(candles.filter((bar) => Number.isFinite(bar.volume) && bar.volume >= 0).map((bar) => ({
     time: bar.time,
     value: bar.volume,
     color: bar.close >= bar.open ? '#48c6a144' : '#ef756844',
@@ -76,7 +76,7 @@ export function mountPriceChart(container, bars, options = {}) {
     const target = options.readout;
     if (!target) return;
     if (!point || !event.time) {
-      target.textContent = options.quote ? formatMoney(options.quote.price) : '—';
+      target.textContent = options.quote?.price != null ? formatMoney(options.quote.price) : '—';
       return;
     }
     const value = `${formatTime(chartDate(event.time), { dateOnly: true })}  O ${formatMoney(point.open)}  H ${formatMoney(point.high)}  L ${formatMoney(point.low)}  C ${formatMoney(point.close)}`;
@@ -115,7 +115,9 @@ function normalizeBar(bar) {
   const low = Number(bar.low ?? bar.l);
   const close = Number(bar.close ?? bar.c);
   if (![normalizedTime, open, high, low, close].every(Number.isFinite)) return null;
-  return { time: normalizedTime, open, high, low, close, volume: Number(bar.volume ?? bar.v) || 0 };
+  const volumeValue = bar.volume ?? bar.v;
+  const volume = volumeValue == null || volumeValue === '' ? null : Number(volumeValue);
+  return { time: normalizedTime, open, high, low, close, volume: Number.isFinite(volume) && volume >= 0 ? volume : null };
 }
 
 function movingAverage(bars, period) {
@@ -132,12 +134,14 @@ function movingAverage(bars, period) {
 export function chartLegend(quote, bars) {
   const last = bars?.at(-1);
   return {
-    price: quote?.price ?? last?.close ?? null,
+    // Historical closes must not be presented as the current quote when the
+    // snapshot endpoint is unavailable.
+    price: quote?.price ?? null,
     open: last?.open ?? null,
     high: last?.high ?? quote?.high ?? null,
     low: last?.low ?? quote?.low ?? null,
     volume: last?.volume ?? quote?.volume ?? null,
     asOf: quote?.timestamp || null,
-    feed: quote?.feed || 'training-sim',
+    feed: quote?.feed || 'unavailable',
   };
 }

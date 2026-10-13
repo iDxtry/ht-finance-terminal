@@ -6,7 +6,6 @@ import { buildPortfolioHistory } from './lib/portfolio-history.js';
 import { encodeCsv } from './lib/csv.js';
 import { backendConfigured, supabase } from './lib/supabase.js';
 import { loadBars, loadSnapshots, MarketDataError } from './services/market-data.js';
-import { generateTrainingBars, trainingSnapshots } from './services/training-market.js';
 import { renderApplication } from './views/terminal-pages.js';
 import { backtestSmaCrossover, simulateMonteCarloGBM } from './quant/index.js';
 import { isPublicMarketSymbol } from '../supabase/functions/_shared/market-access.js';
@@ -15,15 +14,6 @@ const app = document.querySelector('#app');
 let watchlistSyncTimer = null;
 const ROUTES = new Set(['overview', 'markets', 'research', 'proposals', 'portfolio', 'activity', 'quant', 'admin']);
 const STARTING_SYMBOLS = ['SPY', 'QQQ', 'DIA', 'IWM', 'TLT', 'GLD', 'AAPL', 'NVDA'];
-const RANGE_CONFIG = {
-  '1D': { interval: '5Min', count: 78 },
-  '1W': { interval: '15Min', count: 130 },
-  '1M': { interval: '1Hour', count: 140 },
-  '3M': { interval: '1Day', count: 65 },
-  '1Y': { interval: '1Day', count: 260 },
-  '5Y': { interval: '1Day', count: 1000 },
-};
-
 const state = {
   user: null,
   role: 'visitor',
@@ -51,7 +41,7 @@ const state = {
   selectedPortfolioUserId: '',
   portfolioHistory: null,
   portfolioHistoryUserId: '',
-  portfolioHistorySource: 'training-sim',
+  portfolioHistorySource: 'unavailable',
   portfolioHistoryLoading: false,
   portfolioHistoryError: '',
   adminMembers: [],
@@ -62,7 +52,7 @@ const state = {
   quantBars: [],
   quantHistoryLoading: false,
   quantHistoryError: '',
-  quantHistorySource: 'Training simulation',
+  quantHistorySource: 'Unavailable',
   quantHistorySymbol: '',
   pendingCount: 0,
   searchOpen: false,
@@ -134,7 +124,7 @@ function changeSelectedSymbol(symbol) {
   state.quantHistorySymbol = '';
   state.quantHistoryLoading = false;
   state.quantHistoryError = '';
-  state.quantHistorySource = 'Training simulation';
+  state.quantHistorySource = 'Unavailable';
 }
 
 function storageKey(userId) {
@@ -509,13 +499,6 @@ function allMarketSymbols() {
   return [...new Set([...STARTING_SYMBOLS, ...state.watchlist, state.symbol, ...positions])].slice(0, 40);
 }
 
-function setTrainingMarket(symbols = allMarketSymbols()) {
-  state.market.source = 'training-sim';
-  state.market.quotes = new Map(Object.entries(trainingSnapshots(symbols)));
-  state.market.asOf = null;
-  state.market.marketClock = null;
-}
-
 async function refreshMarketData(options = {}) {
   if (marketRequestInFlight) return;
   const previousSource = state.market.source;
@@ -524,15 +507,11 @@ async function refreshMarketData(options = {}) {
   if (!options.silent) render();
   const symbols = allMarketSymbols();
   if (!backendConfigured) {
-    if (state.user) setTrainingMarket(symbols);
-    else {
-      state.market.source = 'unavailable';
-      state.market.quotes = new Map();
-      state.market.asOf = null;
-    }
-    state.market.error = state.user
-      ? 'Supabase is not configured in this build.'
-      : 'Shared IEX market data is unavailable; no simulated guest prices are shown.';
+    state.market.source = 'unavailable';
+    state.market.quotes = new Map();
+    state.market.asOf = null;
+    state.market.marketClock = null;
+    state.market.error = 'Supabase is not configured in this build. Verified market data is unavailable.';
     state.market.loading = false;
     state.market.lastRefreshAt = Date.now();
     marketRequestInFlight = false;
@@ -554,15 +533,12 @@ async function refreshMarketData(options = {}) {
     state.market.asOf = result.receivedAt || new Date().toISOString();
     state.market.error = '';
   } catch (error) {
-    if (state.user) setTrainingMarket(symbols);
-    else {
-      state.market.source = 'unavailable';
-      state.market.quotes = new Map();
-      state.market.asOf = null;
-      state.market.marketClock = null;
-    }
+    state.market.source = 'unavailable';
+    state.market.quotes = new Map();
+    state.market.asOf = null;
+    state.market.marketClock = null;
     state.market.error = error instanceof MarketDataError ? error.message : String(error?.message || error);
-    if (!state.user) state.market.error = `Shared IEX market data is unavailable. ${state.market.error}`;
+    state.market.error = `Shared Alpaca IEX data is unavailable. ${state.market.error}`;
   }
   state.market.loading = false;
   state.market.lastRefreshAt = Date.now();
@@ -580,11 +556,12 @@ async function loadChartBars(options = {}) {
   const requestNumber = ++chartRequestNumber;
   const symbol = state.symbol;
   const range = state.chartRange;
-  const config = RANGE_CONFIG[range] || RANGE_CONFIG['1M'];
   state.market.loadingBars = true;
   if (!options.silent && state.route === 'markets') render();
 
-  if ((state.market.source === 'iex' || !state.user) && supabase) {
+  state.market.bars = [];
+  state.market.chartSource = 'unavailable';
+  if (supabase) {
     try {
       const result = await loadBars(supabase, symbol, range);
       if (requestNumber !== chartRequestNumber || symbol !== state.symbol || range !== state.chartRange) return;
@@ -593,21 +570,13 @@ async function loadChartBars(options = {}) {
       if (!state.market.bars.length) state.market.error = `No ${range} history returned for ${symbol}.`;
     } catch (error) {
       if (requestNumber !== chartRequestNumber) return;
-      if (state.user) {
-        state.market.bars = generateTrainingBars(symbol, config.count, config.interval);
-        state.market.chartSource = 'training-sim';
-      } else {
-        state.market.bars = [];
-        state.market.chartSource = 'unavailable';
-      }
-      state.market.error = error instanceof Error ? error.message : String(error);
+      state.market.bars = [];
+      state.market.chartSource = 'unavailable';
+      const detail = error instanceof Error ? error.message : String(error);
+      state.market.error = `Verified IEX history is unavailable for ${symbol}. ${detail}`;
     }
-  } else if (state.market.source === 'unavailable' && !state.user) {
-    state.market.bars = [];
-    state.market.chartSource = 'unavailable';
   } else {
-    state.market.bars = generateTrainingBars(symbol, config.count, config.interval);
-    state.market.chartSource = 'training-sim';
+    state.market.error = 'Verified IEX history is unavailable because the shared market-data client is not configured.';
   }
   state.market.loadingBars = false;
   if (state.route === 'markets') render();
@@ -641,7 +610,7 @@ async function loadPortfolioHistory(userId = state.selectedPortfolioUserId || st
   const requestedSymbols = [...new Set([...symbols, 'SPY'])];
   const priceBarsBySymbol = {};
   const failures = [];
-  const useExchangeHistory = state.market.source === 'iex' && Boolean(supabase) && hasPermission('market_data.read');
+  const useExchangeHistory = Boolean(supabase) && hasPermission('market_data.read');
 
   if (useExchangeHistory) {
     state.portfolioHistorySource = 'iex';
@@ -661,10 +630,8 @@ async function loadPortfolioHistory(userId = state.selectedPortfolioUserId || st
     });
     await Promise.all(workers);
   } else {
-    state.portfolioHistorySource = 'training-sim';
-    for (const symbol of requestedSymbols) {
-      priceBarsBySymbol[symbol] = generateTrainingBars(symbol, 1_000, '1Day');
-    }
+    state.portfolioHistorySource = 'unavailable';
+    failures.push(supabase ? 'This account does not have market-data history access' : 'The shared market-data client is not configured');
   }
 
   if (requestNumber !== portfolioHistoryRequestNumber) return;
@@ -685,8 +652,8 @@ async function loadQuantHistory({ force = false } = {}) {
   const symbol = state.symbol;
   if (!force && state.quantHistorySymbol === symbol && state.quantBars.length) return;
   state.quantHistorySymbol = symbol;
-  state.quantHistorySource = 'Training simulation';
-  state.quantBars = generateTrainingBars(symbol, 260, '1Day');
+  state.quantHistorySource = 'Unavailable';
+  state.quantBars = [];
   state.quantHistoryError = '';
   state.quantHistoryLoading = true;
   state.quantBacktest = null;
@@ -699,8 +666,10 @@ async function loadQuantHistory({ force = false } = {}) {
       state.quantHistorySource = 'Alpaca IEX';
     } catch (error) {
       if (state.symbol !== symbol || state.quantHistorySymbol !== symbol) return;
-      state.quantHistoryError = `Historical IEX bars are unavailable for ${symbol}: ${error?.message || 'request failed'}. Training series remains labeled as synthetic.`;
+      state.quantHistoryError = `Historical Alpaca IEX bars are unavailable for ${symbol}: ${error?.message || 'request failed'}. No substitute series is used.`;
     }
+  } else {
+    state.quantHistoryError = 'Historical backtests require a signed-in Quant account with market-data access.';
   }
   state.quantHistoryLoading = false;
   if (state.route === 'quant') render();

@@ -97,7 +97,7 @@ test('signed-out market view renders received IEX quotes and keeps the feed labe
   const html = renderApplication(state);
 
   assert.match(html, /Shared Alpaca IEX/);
-  assert.match(html, /IEX EXCHANGE FEED/);
+  assert.match(html, /ALPACA IEX/);
   assert.match(html, /\$611\.40/);
   assert.doesNotMatch(html, /Market data unavailable/);
 });
@@ -131,16 +131,19 @@ test('quote panel shows quote observation time separately from response receipt 
   assert.match(html, /QUOTE Oct 12, 2026 07:30:00 PM ET · RECEIVED .* · MARKET CLOSED/);
 });
 
-test('Quant Lab labels synthetic fallback, shows the history error, and offers a retry', () => {
+test('Quant Lab does not substitute synthetic history after a provider failure', () => {
   const state = baseState({ route: 'quant', role: 'quant', permissions: ['quant.experiments.run', 'market_data.read'] });
-  state.quantHistorySource = 'Training simulation';
-  state.quantHistoryError = 'Historical IEX bars are unavailable for SPY.';
+  state.quantHistorySource = 'Unavailable';
+  state.quantBars = [];
+  state.quantHistoryError = 'Historical Alpaca IEX bars are unavailable for SPY. No substitute series is used.';
   state.quantHistoryLoading = false;
   const html = renderApplication(state);
 
-  assert.match(html, /Training simulation/);
-  assert.match(html, /Historical IEX bars are unavailable for SPY/);
+  assert.match(html, /Unavailable/);
+  assert.match(html, /Historical Alpaca IEX bars are unavailable for SPY/);
   assert.match(html, /data-action="retry-quant-history"[^>]*>Refresh history/);
+  assert.doesNotMatch(html, /training series|synthetic daily|TRAINING DATA/i);
+  assert.match(html, /<button class="button" type="submit" disabled>Run on SPY ↗<\/button>/);
 });
 
 test('Research is a distinct company workspace linked to Markets charts and club ideas', () => {
@@ -172,7 +175,7 @@ test('Portfolio displays unavailable marks and totals when an open position has 
   assert.match(html, /Current quote unavailable: AAPL/);
   assert.match(html, /VALUATION UNAVAILABLE FOR AAPL/);
   assert.match(html, /without a same-session close for: AAPL/);
-  assert.match(html, /only with that session’s close; missing marks stay unavailable, with no older close carried forward/);
+  assert.match(html, /using same-session closes; missing marks remain unavailable, with no stale close substituted/);
   assert.doesNotMatch(html, /latest available close|prior close exists/);
   assert.match(html, /<td class="numeric">\$100\.00<\/td><td class="numeric">—<\/td><td class="numeric">—<\/td><td class="numeric is-flat">—<\/td>/);
   assert.doesNotMatch(html, /\$100\.00 · cost/);

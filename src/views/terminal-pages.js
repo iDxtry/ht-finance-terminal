@@ -46,8 +46,8 @@ export function renderApplication(state) {
     || 'Guest session';
   const initials = userName.split(/[\s._-]/).filter(Boolean).slice(0, 2).map((part) => part[0].toUpperCase()).join('') || 'G';
   const roleName = state.role === 'visitor' ? 'Research preview' : state.role === 'pending' ? 'Pending activation' : state.role;
-  const marketLabel = state.market.source === 'iex' ? 'Shared Alpaca IEX' : state.market.source === 'training-sim' ? 'Training tape' : 'Market data unavailable';
-  const marketClass = state.market.source === 'iex' ? 'feed-live' : 'feed-demo';
+  const marketLabel = state.market.source === 'iex' ? 'Shared Alpaca IEX' : 'Market data unavailable';
+  const marketClass = state.market.source === 'iex' ? 'feed-live' : 'feed-offline';
 
   return `
     <a class="skip-link" href="#main-content">Skip to terminal</a>
@@ -67,7 +67,7 @@ export function renderApplication(state) {
         <div class="sidebar-bottom">
           <div class="connection-card">
             <div class="connection-title"><span class="feed-dot ${marketClass}"></span><b>${marketLabel}</b></div>
-            <p>${state.market.source === 'iex' ? 'Shared IEX-only quotes · US equities' : state.market.source === 'training-sim' ? 'Synthetic values · training only' : 'Guest quotes require the shared service'}</p>
+            <p>${state.market.source === 'iex' ? 'IEX exchange prices and volume · not consolidated US data' : 'No verified quotes · no substitute data is shown'}</p>
           </div>
           <div class="user-card">
             <span class="avatar">${h(initials)}</span>
@@ -139,8 +139,7 @@ function heading(kicker, title, description, action = '') {
 
 function marketStatus(state) {
   const connected = state.market.source === 'iex';
-  const training = state.market.source === 'training-sim';
-  return `<span class="source-label ${connected ? 'source-connected' : training ? 'source-simulated' : 'source-neutral'}"><i></i>${connected ? 'IEX EXCHANGE FEED' : training ? 'TRAINING SIMULATION' : 'NO VERIFIED FEED'}</span>`;
+  return `<span class="source-label ${connected ? 'source-connected' : 'source-neutral'}"><i></i>${connected ? 'ALPACA IEX' : 'NO VERIFIED FEED'}</span>`;
 }
 
 function marketRefreshButton(state) {
@@ -170,16 +169,17 @@ function watchlistTable(state, options = {}) {
   const symbols = state.watchlist.length ? state.watchlist : DEFAULT_WATCHLIST;
   if (!symbols.length) return `<div class="table-empty"><b>Your watchlist is empty.</b><span>Search for a company above and add it to follow the tape.</span></div>`;
   return `<div class="table-frame"><table class="data-table watch-table">
-    <thead><tr><th>Instrument</th><th>Last</th><th>Change</th><th>Volume</th><th></th></tr></thead>
+    <thead><tr><th>Instrument</th><th>Last</th><th>Change</th><th>Day volume</th><th></th></tr></thead>
     <tbody>${symbols.map((symbol) => {
       const item = instrument(symbol);
       const quote = quoteFor(state, symbol);
-      const change = quote?.change ?? 0;
+      const change = quote?.change ?? null;
+      const hasChange = quote?.change != null && quote?.changePercent != null;
       return `<tr>
         <td><button class="instrument-select" type="button" data-action="open-symbol" data-symbol="${h(symbol)}"><b>${h(symbol)}</b><span>${h(item.name)}</span></button></td>
         <td class="numeric">${quote ? formatMoney(quote.price) : '—'}</td>
-        <td class="numeric ${classForChange(change)}">${quote ? `${formatSignedMoney(change)} <small>${formatPercent(quote.changePercent)}</small>` : '—'}</td>
-        <td class="numeric volume-cell">${quote ? formatCompact(quote.volume) : '—'}</td>
+        <td class="numeric ${classForChange(change)}">${hasChange ? `${formatSignedMoney(change)} <small>${formatPercent(quote.changePercent)}</small>` : '—'}</td>
+        <td class="numeric volume-cell">${quote?.volume != null ? formatCompact(quote.volume) : '—'}</td>
         <td class="row-actions"><button class="mini-icon" type="button" data-action="open-symbol" data-symbol="${h(symbol)}" title="Open ${h(symbol)} workspace">↗</button>${options.manage ? `<button class="mini-icon remove-icon" type="button" data-action="remove-watch" data-symbol="${h(symbol)}" title="Remove ${h(symbol)} from watchlist">×</button>` : ''}</td>
       </tr>`;
     }).join('')}</tbody>
@@ -188,8 +188,12 @@ function watchlistTable(state, options = {}) {
 
 function overviewPage(state) {
   const watchQuotes = state.watchlist.map((symbol) => quoteFor(state, symbol)).filter(Boolean);
-  const advancing = watchQuotes.filter((quote) => quote.change > 0).length;
-  const declining = watchQuotes.filter((quote) => quote.change < 0).length;
+  const pricedChanges = watchQuotes.filter((quote) => quote.change != null && quote.changePercent != null);
+  const advancing = pricedChanges.filter((quote) => quote.change > 0).length;
+  const declining = pricedChanges.filter((quote) => quote.change < 0).length;
+  const breadthLabel = pricedChanges.length
+    ? `${advancing} advancing · ${declining} declining · ${pricedChanges.length}/${state.watchlist.length} priced`
+    : 'Unavailable';
   const own = calculatePortfolio(state.trades, state.user?.id, state.market.quotes);
   const pending = state.proposals.filter((proposal) => proposal.status === 'pending').length;
   const portfolioLabel = state.user && state.role !== 'pending' ? formatAvailableMoney(own.equity) : '—';
@@ -208,7 +212,7 @@ function overviewPage(state) {
       </section>
       <section class="panel pulse-panel">
         <div class="panel-heading"><div><div class="eyebrow">DESK PULSE / ${formatTime(new Date())}</div><h2>What needs attention</h2></div></div>
-        <div class="pulse-metric"><span>Watchlist breadth</span><b class="${advancing >= declining ? 'is-up' : 'is-down'}">${advancing} advancing <i>·</i> ${declining} declining</b></div>
+        <div class="pulse-metric"><span>Watchlist breadth</span><b class="${pricedChanges.length ? classForChange(advancing - declining) : ''}">${breadthLabel}</b></div>
         <div class="pulse-metric"><span>Manager review queue</span><b>${can(state, 'proposals.review') ? `${pending} pending` : state.role === 'pending' || !state.user ? 'Member access required' : '—'}</b></div>
         <div class="pulse-metric"><span>My paper equity</span><b>${portfolioLabel}</b></div>
         <div class="pulse-rule"></div>
@@ -223,21 +227,26 @@ function overviewPage(state) {
         ${activity.length ? `<div class="ledger-list">${activity.map((trade) => compactTrade(state, trade)).join('')}</div>` : `<div class="table-empty"><b>The execution journal is clear.</b><span>Paper fills appear after a manager approves and records a proposal.</span></div>`}
       </section>
     </div>
-    <div class="data-footnote">${state.market.source === 'iex' ? `SHARED ALPACA IEX SNAPSHOT · RECEIVED ${state.market.asOf ? relativeTime(state.market.asOf).toUpperCase() : '—'}` : state.market.source === 'training-sim' ? 'TRAINING TAPE · SYNTHETIC PRICES · NOT MARKET DATA' : 'MARKET DATA UNAVAILABLE · NO GUEST PRICE SUBSTITUTION'} <span>Paper equity is marked against the selected price feed. No orders are sent to a broker.</span></div>
+    <div class="data-footnote">${state.market.source === 'iex' ? `ALPACA IEX SNAPSHOT · IEX-ONLY PRICES AND VOLUME · RECEIVED ${state.market.asOf ? relativeTime(state.market.asOf).toUpperCase() : '—'}` : 'MARKET DATA UNAVAILABLE · NO SUBSTITUTE PRICES'} <span>Paper equity uses verified quotes when available. No orders are sent to a broker.</span></div>
   `;
 }
 
 function indexTile(state, symbol) {
   const item = instrument(symbol);
   const quote = quoteFor(state, symbol);
-  return `<button type="button" class="index-tile" data-action="open-symbol" data-symbol="${h(symbol)}"><span>${h(symbol)} <small>${h(item.name.replace(/ (ETF|Trust|Shares)$/i, ''))}</small></span><b>${quote ? formatMoney(quote.price) : '—'}</b><i class="${classForChange(quote?.change || 0)}">${quote ? formatPercent(quote.changePercent) : '—'}</i></button>`;
+  const hasChange = quote?.change != null && quote?.changePercent != null;
+  return `<button type="button" class="index-tile" data-action="open-symbol" data-symbol="${h(symbol)}"><span>${h(symbol)} <small>${h(item.name.replace(/ (ETF|Trust|Shares)$/i, ''))}</small></span><b>${quote ? formatMoney(quote.price) : '—'}</b><i class="${classForChange(quote?.change ?? null)}">${hasChange ? formatPercent(quote.changePercent) : '—'}</i></button>`;
 }
 
 function marketsPage(state) {
   const item = instrument(state.symbol);
   const quote = quoteFor(state, state.symbol);
   const legend = chartLegend(quote, state.market.bars);
-  const change = quote?.change ?? 0;
+  const change = quote?.change ?? null;
+  const hasChange = quote?.change != null && quote?.changePercent != null;
+  const rangePosition = quote?.high != null && quote?.low != null && quote.high > quote.low
+    ? `${Math.min(100, Math.max(0, ((quote.price - quote.low) / (quote.high - quote.low)) * 100))}%`
+    : null;
   const isWatched = state.watchlist.includes(state.symbol);
   const movers = [...INSTRUMENTS]
     .map(([symbol]) => ({ symbol, quote: quoteFor(state, symbol) }))
@@ -250,7 +259,7 @@ function marketsPage(state) {
     ${marketDataNotice(state)}
     <section class="quote-header">
       <div class="quote-identity"><span class="exchange-code">${h(item.exchange)}</span><h2>${h(state.symbol)}</h2><p>${h(item.name)} <i>·</i> ${h(item.sector)}</p></div>
-      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(change)}">${quote ? `${formatSignedMoney(change)} (${formatPercent(quote.changePercent)})` : 'Awaiting feed'}</span><small>${quoteTimestampLabel(state, quote)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}</small></div>
+      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(change)}">${hasChange ? `${formatSignedMoney(change)} (${formatPercent(quote.changePercent)})` : quote ? 'Change unavailable' : 'Awaiting verified quote'}</span><small>${quoteTimestampLabel(state, quote)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}</small></div>
       <div class="quote-actions">${marketStatus(state)}<button class="button ${isWatched ? 'button-muted' : 'button-accent'}" type="button" data-action="toggle-watch" data-symbol="${h(state.symbol)}">${isWatched ? 'Following ✓' : '＋ Follow'}</button>${can(state, 'proposals.create') ? `<button class="button" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">Pitch trade</button>` : ''}</div>
     </section>
     <div class="market-layout">
@@ -258,19 +267,19 @@ function marketsPage(state) {
         <div class="chart-panel-head"><div><div class="eyebrow">PRICE HISTORY / ${h(state.symbol)} / ${h(state.chartRange)}</div><h2>${legend.price ? formatMoney(legend.price) : 'Price chart'} <small id="chart-crosshair-readout">Move crosshair for OHLC</small></h2></div><div class="chart-controls">
           <div class="segmented" aria-label="Chart range">${['1D', '1W', '1M', '3M', '1Y', '5Y'].map((range) => `<button type="button" data-action="chart-range" data-range="${range}" class="${state.chartRange === range ? 'selected' : ''}" aria-pressed="${state.chartRange === range}">${range}</button>`).join('')}</div>
         </div></div>
-        <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><span>${state.market.loadingBars ? 'LOADING BARS…' : `${state.market.bars.length} BARS`} · ${h(state.market.chartSource === 'iex' ? 'IEX' : state.market.chartSource === 'training-sim' ? 'TRAINING SIM' : 'NO DATA')}</span></div>
+        <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><span>${state.market.loadingBars ? 'LOADING BARS…' : `${state.market.bars.length} BARS`} · ${h(state.market.chartSource === 'iex' ? 'IEX' : 'NO DATA')}</span></div>
         <div id="price-chart" class="price-chart" aria-label="Interactive candlestick price chart"></div>
-        <div class="chart-credit"><span>${state.market.chartSource === 'iex' ? 'Source: Alpaca IEX · Exchange coverage is limited to IEX.' : state.market.chartSource === 'training-sim' ? 'Illustrative generated candles · no current market data.' : 'No chart bars are displayed without verified market data.'}</span><a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™ ↗</a></div>
+        <div class="chart-credit"><span>${state.market.chartSource === 'iex' ? 'Source: Alpaca IEX · candles and volume reflect IEX prints, not consolidated US volume.' : 'No chart bars are displayed without verified market data.'}</span><a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™ ↗</a></div>
       </section>
       <aside class="panel quote-details">
-        <div class="panel-heading"><div><div class="eyebrow">SESSION SNAPSHOT</div><h2>Trading range</h2><small class="session-state">${state.market.source === 'iex' && state.market.marketClock ? `US MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'} · NEW YORK` : state.market.source === 'iex' ? 'US MARKET STATUS UNAVAILABLE' : 'NO VERIFIED SESSION DATA'}</small></div><span class="detail-feed-dot ${state.market.source === 'iex' ? 'feed-live' : 'feed-demo'}"></span></div>
+        <div class="panel-heading"><div><div class="eyebrow">SESSION SNAPSHOT</div><h2>Trading range</h2><small class="session-state">${state.market.source === 'iex' && state.market.marketClock ? `US MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'} · NEW YORK` : state.market.source === 'iex' ? 'US MARKET STATUS UNAVAILABLE' : 'NO VERIFIED SESSION DATA'}</small></div><span class="detail-feed-dot ${state.market.source === 'iex' ? 'feed-live' : 'feed-offline'}"></span></div>
         ${detailRow('Open', quote?.open)}${detailRow('Day high', quote?.high)}${detailRow('Day low', quote?.low)}${detailRow('Prev. close', quote?.previousClose)}${detailRow('Volume', quote?.volume, true)}${detailRow('Bid', quote?.bid)}${detailRow('Ask', quote?.ask)}
-        <div class="range-meter"><div class="range-track"><i style="--range-position:${quote && quote.high > quote.low ? `${Math.min(100, Math.max(0, ((quote.price - quote.low) / (quote.high - quote.low)) * 100))}%` : '50%'}"></i></div><div><span>LOW ${quote ? formatMoney(quote.low) : '—'}</span><span>HIGH ${quote ? formatMoney(quote.high) : '—'}</span></div></div>
+        <div class="range-meter"><div class="range-track">${rangePosition == null ? '' : `<i style="--range-position:${rangePosition}"></i>`}</div><div><span>LOW ${quote?.low != null ? formatMoney(quote.low) : '—'}</span><span>HIGH ${quote?.high != null ? formatMoney(quote.high) : '—'}</span></div></div>
       </aside>
     </div>
     <div class="market-bottom-grid">
       <section class="panel movers-panel"><div class="panel-heading"><div><div class="eyebrow">COVERED UNIVERSE</div><h2>Largest moves</h2></div><span class="quiet-count">${movers.length} symbols</span></div>
-        ${movers.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Ticker</th><th>Last</th><th>Day change</th></tr></thead><tbody>${movers.map(({symbol,quote:row}) => `<tr><td><button type="button" class="instrument-select" data-action="open-symbol" data-symbol="${h(symbol)}"><b>${h(symbol)}</b><span>${h(instrument(symbol).name)}</span></button></td><td class="numeric">${formatMoney(row.price)}</td><td class="numeric ${classForChange(row.change)}">${formatPercent(row.changePercent)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>Waiting on a snapshot.</b><span>Market changes will populate after the feed connects.</span></div>`}
+        ${movers.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Ticker</th><th>Last</th><th>Day change</th></tr></thead><tbody>${movers.map(({symbol,quote:row}) => `<tr><td><button type="button" class="instrument-select" data-action="open-symbol" data-symbol="${h(symbol)}"><b>${h(symbol)}</b><span>${h(instrument(symbol).name)}</span></button></td><td class="numeric">${formatMoney(row.price)}</td><td class="numeric ${classForChange(row.change ?? null)}">${row.changePercent != null ? formatPercent(row.changePercent) : '—'}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>Waiting on a snapshot.</b><span>Market changes will populate after the feed connects.</span></div>`}
       </section>
       <section class="panel market-watch-panel"><div class="panel-heading"><div><div class="eyebrow">PERSONAL COVERAGE / ${state.watchlist.length}</div><h2>Watchlist</h2></div>${marketStatus(state)}</div>${watchlistTable(state, {manage:true})}</section>
     </div>
@@ -295,12 +304,12 @@ function researchPage(state) {
     ${marketDataNotice(state)}
     <section class="quote-header research-quote-header">
       <div class="quote-identity"><span class="exchange-code">${h(item.exchange)}</span><h2>${h(state.symbol)}</h2><p>${h(item.name)} <i>·</i> ${h(item.sector)}</p></div>
-      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(quote?.change ?? 0)}">${quote ? `${formatSignedMoney(quote.change)} (${formatPercent(quote.changePercent)})` : 'Awaiting verified quote'}</span><small>${quoteTimestampLabel(state, quote)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}</small></div>
+      <div class="quote-price-block"><strong>${quote ? formatMoney(quote.price, { digits: quote.price < 2 ? 4 : 2 }) : '—'}</strong><span class="${classForChange(quote?.change ?? null)}">${quote?.change != null && quote?.changePercent != null ? `${formatSignedMoney(quote.change)} (${formatPercent(quote.changePercent)})` : quote ? 'Change unavailable' : 'Awaiting verified quote'}</span><small>${quoteTimestampLabel(state, quote)} · ${state.market.marketClock ? `MARKET ${state.market.marketClock.isOpen ? 'OPEN' : 'CLOSED'}` : 'SESSION UNKNOWN'}</small></div>
       <div class="quote-actions">${marketStatus(state)}<a class="button" href="#markets?symbol=${encodeURIComponent(state.symbol)}">Open chart & tape ↗</a>${can(state, 'proposals.create') ? `<button class="button button-accent" type="button" data-action="open-proposal" data-symbol="${h(state.symbol)}">＋ New proposal</button>` : ''}</div>
     </section>
     <div class="research-grid">
       <section class="panel research-profile"><div class="panel-heading"><div><div class="eyebrow">INSTRUMENT PROFILE</div><h2>${h(item.name)}</h2></div><span class="quiet-count">${h(item.symbol)}</span></div>
-        <div class="research-facts"><div><small>SECTOR</small><b>${h(item.sector || '—')}</b></div><div><small>EXCHANGE</small><b>${h(item.exchange || '—')}</b></div><div><small>MARKET STATUS</small><b>${state.market.source === 'iex' && state.market.marketClock ? (state.market.marketClock.isOpen ? 'Open' : 'Closed') : 'Unavailable'}</b></div><div><small>DATA SOURCE</small><b>${state.market.source === 'iex' ? 'Alpaca IEX' : state.market.source === 'training-sim' ? 'Training data' : 'Unavailable'}</b></div></div>
+        <div class="research-facts"><div><small>SECTOR</small><b>${h(item.sector || '—')}</b></div><div><small>EXCHANGE</small><b>${h(item.exchange || '—')}</b></div><div><small>MARKET STATUS</small><b>${state.market.source === 'iex' && state.market.marketClock ? (state.market.marketClock.isOpen ? 'Open' : 'Closed') : 'Unavailable'}</b></div><div><small>DATA SOURCE</small><b>${state.market.source === 'iex' ? 'Alpaca IEX' : 'Unavailable'}</b></div></div>
         <div class="research-range-grid">${detailRow('Open', quote?.open)}${detailRow('Previous close', quote?.previousClose)}${detailRow('Day high', quote?.high)}${detailRow('Day low', quote?.low)}${detailRow('Volume', quote?.volume, true)}${detailRow('Bid', quote?.bid)}${detailRow('Ask', quote?.ask)}</div>
         <p class="research-disclosure">Fundamental statements and analyst estimates are not connected. This profile shows instrument metadata and verified market-feed fields only.</p>
       </section>
@@ -422,7 +431,7 @@ function portfolioPage(state) {
     </div>
     ${portfolioHistoryPanel(state, portfolioUserId, selectedAccountName)}
     ${canViewAssigned ? `<section class="panel assigned-books"><div class="panel-heading"><div><div class="eyebrow">PORTFOLIO COVERAGE / ${books.length} ACCOUNTS</div><h2>Assigned intern books</h2></div><span class="quiet-count">${h(coverageName)}</span></div>${books.length ? `<div class="table-frame"><table class="data-table"><thead><tr><th>Intern / account</th><th>Team</th><th>Equity</th><th>Cash</th><th>Market value</th><th>Total P/L</th></tr></thead><tbody>${books.map(({member,portfolio}) => `<tr><td>${h(member.full_name || member.email || 'Club member')}</td><td>${h(member.team || '—')}</td><td class="numeric">${formatAvailableMoney(portfolio.equity)}</td><td class="numeric">${formatMoney(portfolio.cash)}</td><td class="numeric">${formatAvailableMoney(portfolio.marketValue)}</td><td class="numeric ${classForChange(portfolio.totalPnl)}">${formatAvailableSignedMoney(portfolio.totalPnl)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="table-empty"><b>No Intern portfolios are assigned to this view.</b><span>Assign teams in People & Teams.</span></div>'}</section>` : ''}
-    <section class="panel positions-panel"><div class="panel-heading"><div><div class="eyebrow">LONG POSITIONS / AVERAGE COST</div><h2>Holdings</h2></div><span class="quiet-count">${priced} of ${allPositions.length} marked from ${state.market.source === 'iex' ? 'IEX' : 'training data'}</span></div>
+    <section class="panel positions-panel"><div class="panel-heading"><div><div class="eyebrow">LONG POSITIONS / AVERAGE COST</div><h2>Holdings</h2></div><span class="quiet-count">${priced} of ${allPositions.length} marked ${state.market.source === 'iex' ? 'from IEX' : 'with verified quotes'}</span></div>
       ${allPositions.length ? `<div class="table-frame"><table class="data-table positions-table"><thead><tr>${canViewAssigned ? '<th>Intern</th>' : ''}<th>Security</th><th>Shares</th><th>Avg. cost</th><th>Mark</th><th>Market value</th><th>Unrealized P/L</th></tr></thead><tbody>${allPositions.map((position) => `<tr>${canViewAssigned ? `<td>${h(position.ownerName)}</td>` : ''}<td><button class="instrument-select" type="button" data-action="open-symbol" data-symbol="${h(position.symbol)}"><b>${h(position.symbol)}</b><span>${h(instrument(position.symbol).name)}</span></button></td><td class="numeric">${formatNumber(position.shares, 4)}</td><td class="numeric">${formatMoney(position.averageCost)}</td><td class="numeric">${formatAvailableMoney(position.mark)}</td><td class="numeric">${formatAvailableMoney(position.marketValue)}</td><td class="numeric ${classForChange(position.unrealizedPnl)}">${formatAvailableSignedMoney(position.unrealizedPnl)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-empty"><b>${canViewAssigned ? 'No assigned holdings yet.' : 'No holdings yet.'}</b><span>Propose an idea, wait for manager approval, then the manager records the paper fill.</span><a class="text-action" href="#proposals">Open Proposals ↗</a></div>`}
     </section>
     <div class="data-footnote">${valuationComplete ? 'OPEN POSITIONS ARE MARKED ONLY WITH VERIFIED QUOTES.' : `VALUATION UNAVAILABLE FOR ${h(unpricedSymbols.join(', ') || 'ONE OR MORE OPEN POSITIONS')} UNTIL A VERIFIED QUOTE ARRIVES.`}<span>Cash and average cost remain available; no cost-based price estimate is substituted. Paper trades do not route to a broker.</span></div>
@@ -443,8 +452,8 @@ function formatAvailableSignedMoney(value) {
 
 function portfolioHistoryPanel(state, userId, accountName) {
   const history = state.portfolioHistoryUserId === userId ? state.portfolioHistory : null;
-  const sourceIsTraining = state.portfolioHistorySource !== 'iex';
-  const sourceLabel = sourceIsTraining ? 'TRAINING SIMULATION · SYNTHETIC DAILY SERIES' : 'ALPACA IEX · HISTORICAL DAILY BARS';
+  const sourceAvailable = state.portfolioHistorySource === 'iex';
+  const sourceLabel = sourceAvailable ? 'ALPACA IEX · HISTORICAL DAILY BARS' : 'HISTORY UNAVAILABLE';
   const metrics = history?.metrics || {};
   const unpricedSymbols = [...new Set((history?.points || []).flatMap((point) => point.unpricedSymbols || []))];
   const sharpe = Number.isFinite(metrics.sharpeRatio) ? metrics.sharpeRatio.toFixed(2) : '—';
@@ -462,18 +471,18 @@ function portfolioHistoryPanel(state, userId, accountName) {
           ? '<div class="history-empty">Held symbols have no close in the available daily history window.</div>'
           : '';
   return `<section class="panel portfolio-history-panel">
-    <div class="panel-heading"><div><div class="eyebrow">DAILY MARKS / ${h(accountName)}</div><h2>Equity vs. SPY</h2></div><span class="source-label ${sourceIsTraining ? 'source-simulated' : 'source-connected'}"><i></i>${sourceLabel}</span></div>
+    <div class="panel-heading"><div><div class="eyebrow">DAILY MARKS / ${h(accountName)}</div><h2>Equity vs. SPY</h2></div><span class="source-label ${sourceAvailable ? 'source-connected' : 'source-neutral'}"><i></i>${sourceLabel}</span></div>
     ${state.portfolioHistoryError ? `<div class="history-warning" role="status">${h(state.portfolioHistoryError)}</div>` : ''}
     ${unpricedSymbols.length ? `<div class="history-warning" role="status">Portfolio equity is omitted on dates without a same-session close for: ${h(unpricedSymbols.join(', '))}.</div>` : ''}
     <div class="history-chart-wrap">${empty || historySvg(history)}</div>
-    <div class="history-legend"><span><i class="equity-swatch"></i>${h(accountName)} equity</span><span><i class="benchmark-swatch"></i>SPY buy &amp; hold · ${formatMoney(history?.benchmarkStartingValue || 100_000)}</span><small>${history?.points.length ? `${history.points[0].date} — ${history.points.at(-1).date} · ${history.points.length} daily marks` : '—'}</small></div>
+    <div class="history-legend"><span><i class="equity-swatch"></i>${h(accountName)} equity</span><span><i class="benchmark-swatch"></i>SPY buy &amp; hold · ${formatAvailableMoney(history?.benchmarkStartingValue)}</span><small>${history?.points.length ? `${history.points[0].date} — ${history.points.at(-1).date} · ${history.points.length} daily marks` : '—'}</small></div>
     <div class="history-metrics">
-      ${summaryMetric('Cumulative return', totalReturn, history?.comparisonStartDate ? `Since ${history.comparisonStartDate} · base ${formatMoney(history.portfolioStartingValue)}` : 'Against $100,000 starting capital', classForChange(metrics.cumulativeReturnPercent || 0))}
+      ${summaryMetric('Cumulative return', totalReturn, history?.comparisonStartDate ? `Since ${history.comparisonStartDate} · base ${formatMoney(history.portfolioStartingValue)}` : '—', classForChange(metrics.cumulativeReturnPercent || 0))}
       ${summaryMetric('Maximum drawdown', drawdown, 'Peak-to-trough decline', 'is-down')}
       ${summaryMetric('Annualized volatility', vol, 'Daily returns · 252 trading days', '')}
       ${summaryMetric('Sharpe ratio', sharpe, 'Zero risk-free rate · daily returns', '')}
     </div>
-    <p class="history-method">Daily points replay this account’s fills through each date and mark holdings only with that session’s close; missing marks stay unavailable, with no older close carried forward. SPY starts at $100,000 on the first date in this period. ${sourceIsTraining ? 'Synthetic training bars are deterministic and are not market data.' : 'Alpaca IEX is an exchange-limited feed; dates shown are daily bars.'}</p>
+    <p class="history-method">Daily points replay this account’s fills using same-session closes; missing marks remain unavailable, with no stale close substituted. The comparison uses Alpaca IEX daily bars, which represent IEX exchange prints rather than consolidated US market volume.</p>
   </section>`;
 }
 
@@ -549,8 +558,9 @@ function activityPage(state) {
 
 function quantPage(state) {
   if (!can(state, 'quant.experiments.run')) return authGate('Quant Lab is restricted.', 'Members granted Quant research access can run models and analyze historical bars.');
-  const mark = Number(state.market.quotes.get(state.symbol)?.price || 0);
-  const initialPrice = state.quantResults?.parameters?.initialPrice || (mark > 0 ? mark : 100);
+  const mark = state.market.quotes.get(state.symbol)?.price;
+  const initialPrice = state.quantResults?.parameters?.initialPrice ?? (mark > 0 ? mark : '');
+  const initialPriceValue = Number.isFinite(Number(initialPrice)) && Number(initialPrice) > 0 ? Number(initialPrice).toFixed(2) : '';
   const result = state.quantResults;
   const backtest = state.quantBacktest;
   const finalPrices = result?.finalPrices || [];
@@ -564,12 +574,12 @@ function quantPage(state) {
     ${heading('QUANT RESEARCH / MODEL, SIMULATE, RISK-MANAGE', 'Quant Lab<span class="heading-period">.</span>', 'Educational GBM scenarios, historical strategy tests, and transparent risk metrics. Model paths are scenarios, never forecasts.')}
     <div class="quant-lab-grid">
       <section class="panel quant-model-panel">
-        <div class="panel-heading"><div><div class="eyebrow">GEOMETRIC BROWNIAN MOTION / MONTE CARLO</div><h2>Price-path scenarios</h2></div><span class="source-label ${state.market.source === 'iex' ? 'source-connected' : 'source-simulated'}">${state.market.source === 'iex' ? 'IEX REFERENCE' : 'USER-SET MODEL INPUT'}</span></div>
+        <div class="panel-heading"><div><div class="eyebrow">GEOMETRIC BROWNIAN MOTION / MONTE CARLO</div><h2>Price-path scenarios</h2></div><span class="source-label ${mark > 0 ? 'source-connected' : 'source-neutral'}">${mark > 0 ? 'IEX REFERENCE' : 'ENTER START PRICE'}</span></div>
         <p class="quant-intro">Each path compounds percentage shocks, so simulated prices remain positive. Drift and volatility are assumptions you choose; they are not estimated market forecasts.</p>
         <form class="quant-inputs" data-form="quant-simulation">
-          <label>INITIAL PRICE / USD<input name="initialPrice" type="number" min="0.01" max="1000000" step="0.01" value="${Number(initialPrice).toFixed(2)}" required></label>
-          <label>ANNUAL DRIFT / %<input name="drift" type="number" min="-100" max="200" step="0.1" value="8" required></label>
-          <label>ANNUAL VOLATILITY / %<input name="volatility" type="number" min="0" max="300" step="0.1" value="25" required></label>
+          <label>INITIAL PRICE / USD<input name="initialPrice" type="number" min="0.01" max="1000000" step="0.01" value="${initialPriceValue}" placeholder="Verified quote or enter value" required></label>
+          <label>ANNUAL DRIFT ASSUMPTION / %<input name="drift" type="number" min="-100" max="200" step="0.1" placeholder="Enter assumption" required></label>
+          <label>ANNUAL VOLATILITY ASSUMPTION / %<input name="volatility" type="number" min="0" max="300" step="0.1" placeholder="Enter assumption" required></label>
           <label>HORIZON / YEARS<input name="horizonYears" type="number" min="0.1" max="10" step="0.1" value="1" required></label>
           <label>PATHS<input name="pathCount" type="number" min="25" max="1000" step="25" value="250" required></label>
           <label>TIME STEPS<input name="steps" type="number" min="12" max="1000" step="12" value="252" required></label>
@@ -580,15 +590,15 @@ function quantPage(state) {
         <div class="quant-footnote">GBM ASSUMES INDEPENDENT NORMAL SHOCKS, CONSTANT DRIFT AND VOLATILITY, NO FEES, DIVIDENDS, JUMPS, OR STOCHASTIC VOLATILITY.</div>
       </section>
       <section class="panel backtest-panel">
-        <div class="panel-heading"><div><div class="eyebrow">HISTORICAL TEST / NO LOOK-AHEAD SIGNALS</div><h2>SMA crossover</h2></div><div class="market-heading-actions"><span class="source-label ${state.quantHistorySource === 'Alpaca IEX' ? 'source-connected' : 'source-simulated'}">${h(state.quantHistorySource || 'TRAINING DATA')}</span><button class="button compact" type="button" data-action="retry-quant-history" ${state.quantHistoryLoading ? 'disabled' : ''}>${state.quantHistoryLoading ? 'Loading…' : 'Refresh history'}</button></div></div>
+        <div class="panel-heading"><div><div class="eyebrow">HISTORICAL TEST / NO LOOK-AHEAD SIGNALS</div><h2>SMA crossover</h2></div><div class="market-heading-actions"><span class="source-label ${state.quantHistorySource === 'Alpaca IEX' ? 'source-connected' : 'source-neutral'}">${h(state.quantHistorySource || 'Unavailable')}</span><button class="button compact" type="button" data-action="retry-quant-history" ${state.quantHistoryLoading ? 'disabled' : ''}>${state.quantHistoryLoading ? 'Loading…' : 'Refresh history'}</button></div></div>
         <p class="quant-intro">A simple long-or-cash moving-average test. A signal uses the previous close and enters at the next session's open. Results are sensitive to the selected period and omit fees, slippage, and dividends.</p>
         ${state.quantHistoryError ? `<div class="history-warning" role="alert">${h(state.quantHistoryError)}</div>` : ''}
         <form class="backtest-inputs" data-form="quant-backtest">
           <label>FAST SMA<input name="shortWindow" type="number" min="2" max="100" step="1" value="20" required></label>
           <label>SLOW SMA<input name="longWindow" type="number" min="3" max="240" step="1" value="50" required></label>
-          <button class="button" type="submit">Run on ${h(state.symbol)} ↗</button>
+          <button class="button" type="submit" ${state.quantHistoryLoading || !state.quantBars.length ? 'disabled' : ''}>Run on ${h(state.symbol)} ↗</button>
         </form>
-        ${backtest ? `<div class="backtest-results"><div class="quant-summary-grid">${quantMetric('Strategy return', formatPercent(backtest.strategy.cumulativeReturn * 100))}${quantMetric(backtest.benchmarkName || 'Buy & hold', formatPercent(backtest.benchmark.cumulativeReturn * 100))}${quantMetric('Annualized vol.', backtest.strategy.annualizedVolatility === null ? '—' : formatPercent(backtest.strategy.annualizedVolatility * 100))}${quantMetric('Max drawdown', formatPercent(backtest.strategy.maxDrawdown * 100))}${quantMetric('Sharpe ratio', backtest.strategy.sharpeRatio === null ? '—' : backtest.strategy.sharpeRatio.toFixed(2))}${quantMetric('Signals', String(backtest.trades.length))}</div><p class="backtest-source">Data: ${h(backtest.source)} · ${backtest.strategy.observations} daily observations. Compare windows only when start/end dates match.</p></div>` : '<div class="table-empty quant-empty"><b>No backtest has been run.</b><span>Historical IEX bars are used when connected. Otherwise the app labels a deterministic training series.</span></div>'}
+        ${backtest ? `<div class="backtest-results"><div class="quant-summary-grid">${quantMetric('Strategy return', formatPercent(backtest.strategy.cumulativeReturn * 100))}${quantMetric(backtest.benchmarkName || 'Buy & hold', formatPercent(backtest.benchmark.cumulativeReturn * 100))}${quantMetric('Annualized vol.', backtest.strategy.annualizedVolatility === null ? '—' : formatPercent(backtest.strategy.annualizedVolatility * 100))}${quantMetric('Max drawdown', formatPercent(backtest.strategy.maxDrawdown * 100))}${quantMetric('Sharpe ratio', backtest.strategy.sharpeRatio === null ? '—' : backtest.strategy.sharpeRatio.toFixed(2))}${quantMetric('Signals', String(backtest.trades.length))}</div><p class="backtest-source">Data: ${h(backtest.source)} · ${backtest.strategy.observations} daily observations. Compare windows only when start/end dates match.</p></div>` : '<div class="table-empty quant-empty"><b>No backtest has been run.</b><span>Backtests run only on verified historical bars from Alpaca IEX. Retry history when the feed is available.</span></div>'}
         <div class="quant-footnote">PAST RETURNS DO NOT PREDICT FUTURE RESULTS. THIS TEST IS FOR METHODS PRACTICE, NOT A TRADE SIGNAL.</div>
       </section>
     </div>

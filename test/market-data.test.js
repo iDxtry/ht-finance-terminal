@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateTrainingBars, trainingSnapshot, trainingSnapshots } from '../src/services/training-market.js';
+import { chartLegend } from '../src/components/price-chart.js';
 import { cleanSymbol, findInstruments, INSTRUMENTS } from '../src/data/universe.js';
 import {
   hashMarketClientKey,
@@ -35,29 +35,34 @@ function publicMarketClient(response, userId = null) {
   };
 }
 
-test('training candles are deterministic and internally valid', () => {
-  const first = generateTrainingBars('AAPL', 35);
-  const second = generateTrainingBars('AAPL', 35);
-  assert.deepEqual(first, second);
-  assert.equal(first.length, 35);
-  for (const bar of first) {
-    assert.ok(bar.high >= Math.max(bar.open, bar.close));
-    assert.ok(bar.low <= Math.min(bar.open, bar.close));
-    assert.ok(bar.volume > 0);
-  }
+test('chart legend never relabels a historical candle close as the current quote', () => {
+  const legend = chartLegend(null, [{ time: 1_800_000_000, close: 42, volume: 900 }]);
+  assert.equal(legend.price, null);
+  assert.equal(legend.volume, 900);
+  assert.equal(legend.feed, 'unavailable');
 });
 
-test('intraday training ranges produce intraday timestamps', () => {
-  const daily = generateTrainingBars('SPY', 78, '5Min');
-  assert.equal(daily.length, 78);
-  assert.ok(daily.at(-1).time - daily[0].time < 86_400);
-});
+test('market snapshots preserve missing provider fields as unavailable values', async () => {
+  clearMarketCache();
+  const nullableQuote = {
+    symbol: 'SPY', price: 42, timestamp: '2026-10-12T15:00:00Z', feed: 'iex',
+    change: null, changePercent: null, open: null, high: null, low: null,
+    previousClose: null, volume: null, bid: null, ask: null,
+  };
+  const client = publicMarketClient({
+    error: null,
+    data: { ok: true, feed: 'iex', quotes: { SPY: nullableQuote }, receivedAt: '2026-10-12T15:00:01Z' },
+  });
+  const result = await loadSnapshots(client, ['SPY']);
+  assert.equal(result.quotes.SPY.volume, null);
+  assert.equal(result.quotes.SPY.changePercent, null);
 
-test('training snapshots identify themselves as synthetic', () => {
-  const quote = trainingSnapshot('NVDA');
-  assert.equal(quote.feed, 'training-sim');
-  assert.ok(quote.price > 0);
-  assert.equal(trainingSnapshots(['SPY', 'QQQ']).SPY.feed, 'training-sim');
+  clearMarketCache();
+  const missingVolumeClient = publicMarketClient({
+    error: null,
+    data: { ok: true, feed: 'iex', quotes: { SPY: { ...nullableQuote, volume: undefined } }, receivedAt: '2026-10-12T15:00:01Z' },
+  });
+  await assert.rejects(loadSnapshots(missingVolumeClient, ['SPY']), { code: 'INVALID_RESPONSE' });
 });
 
 test('guest market coverage matches the app instrument universe', () => {
