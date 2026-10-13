@@ -1,4 +1,4 @@
-export const MARKET_CHART_RANGES = Object.freeze(['1D', '1W', '1M', '3M', '1Y', '5Y', 'ALL']);
+export const MARKET_CHART_RANGES = Object.freeze(['1D', '1W', '2W', '1M', '3M', '6M', '1Y', '2Y', '5Y', 'ALL']);
 
 export function isMarketChartRange(value) {
   return MARKET_CHART_RANGES.includes(value);
