@@ -4,6 +4,7 @@ import {
   isMarketChartRange,
   MARKET_CHART_RANGES,
   nextMarketChartRange,
+  clampMarketChartLogicalRange,
   shouldExpandMarketChartRange,
 } from '../src/lib/market-ranges.js';
 
@@ -14,6 +15,15 @@ test('chart ranges expand one step at a time and stop at all available history',
   assert.equal(nextMarketChartRange('unknown'), null);
   assert.equal(isMarketChartRange('5Y'), true);
   assert.equal(isMarketChartRange('ALL'), true);
+});
+
+test('all-history chart ranges clamp to available bars without changing an in-bounds zoom', () => {
+  assert.equal(clampMarketChartLogicalRange({ from: 20, to: 80 }, 100), null);
+  assert.deepEqual(clampMarketChartLogicalRange({ from: -10, to: 40 }, 100), { from: 0, to: 50 });
+  assert.deepEqual(clampMarketChartLogicalRange({ from: 60, to: 110 }, 100), { from: 49, to: 99 });
+  assert.deepEqual(clampMarketChartLogicalRange({ from: -20, to: 120 }, 100), { from: 0, to: 99 });
+  assert.equal(clampMarketChartLogicalRange({ from: 0, to: 1 }, 1), null);
+  assert.equal(clampMarketChartLogicalRange(null, 100), null);
 });
 
 test('chart requests a wider range only when zoom or pan reaches beyond loaded bars', () => {

@@ -1,6 +1,6 @@
 import { CandlestickSeries, HistogramSeries, LineSeries, createChart } from 'lightweight-charts';
 import { formatMoney, formatTime } from '../lib/format.js';
-import { shouldExpandMarketChartRange } from '../lib/market-ranges.js';
+import { clampMarketChartLogicalRange, shouldExpandMarketChartRange } from '../lib/market-ranges.js';
 
 export function mountPriceChart(container, bars, options = {}) {
   if (!container) return () => {};
@@ -30,13 +30,16 @@ export function mountPriceChart(container, bars, options = {}) {
       timeVisible: ['1D', '1W', '2W'].includes(options.range),
       secondsVisible: false,
       rightOffset: ['5Y', 'ALL'].includes(options.range) ? 0 : 5,
+      fixLeftEdge: options.range === 'ALL',
+      fixRightEdge: options.range === 'ALL',
     },
     localization: { priceFormatter: (price) => formatMoney(price, { digits: price < 2 ? 4 : 2 }) },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
     handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
   });
 
-  const candles = bars.map(normalizeBar).filter(Boolean);
+  const history = chartHistoryForRange(bars, options.range);
+  const candles = history.visibleBars;
   const candleSeries = chart.addSeries(CandlestickSeries, {
     upColor: '#48c6a1',
     downColor: '#ef7568',
@@ -68,26 +71,40 @@ export function mountPriceChart(container, bars, options = {}) {
     movingAverage20 = chart.addSeries(LineSeries, {
       color: '#e3b45c', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    movingAverage20.setData(movingAverage(candles, 20));
+    movingAverage20.setData(chartMovingAverage(history, 20));
   }
   if (options.showSma50) {
     movingAverage50 = chart.addSeries(LineSeries, {
       color: '#78a8d1', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    movingAverage50.setData(movingAverage(candles, 50));
+    movingAverage50.setData(chartMovingAverage(history, 50));
   }
   if (options.showSma200) {
     movingAverage200 = chart.addSeries(LineSeries, {
       color: '#bd8bd3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
-    movingAverage200.setData(movingAverage(candles, 200));
+    movingAverage200.setData(chartMovingAverage(history, 200));
   }
 
   const timeScale = chart.timeScale();
   timeScale.fitContent();
   let disposed = false;
   let rangeExpansionRequested = false;
+  let rangeClampRequested = false;
   const onVisibleRangeChange = (logicalRange) => {
+    if (rangeClampRequested) return;
+    if (options.range === 'ALL') {
+      const boundedRange = clampMarketChartLogicalRange(logicalRange, candles.length);
+      if (boundedRange) {
+        rangeClampRequested = true;
+        try {
+          timeScale.setVisibleLogicalRange(boundedRange);
+        } finally {
+          rangeClampRequested = false;
+        }
+        return;
+      }
+    }
     if (rangeExpansionRequested || !shouldExpandMarketChartRange(logicalRange, candles.length, options.range)) return;
     if (typeof options.onRangeExpand !== 'function') {
       timeScale.fitContent();
@@ -153,6 +170,35 @@ function normalizeBar(bar) {
   const volumeValue = bar.volume ?? bar.v;
   const volume = volumeValue == null || volumeValue === '' ? null : Number(volumeValue);
   return { time: normalizedTime, open, high, low, close, volume: Number.isFinite(volume) && volume >= 0 ? volume : null };
+}
+
+export function chartHistoryForRange(bars, range) {
+  const calculationBars = bars.map(normalizeBar).filter(Boolean).sort((left, right) => left.time - right.time);
+  if (range !== '5Y' || calculationBars.length === 0) {
+    return { calculationBars, visibleBars: calculationBars, visibleFrom: null };
+  }
+
+  const latest = chartDate(calculationBars.at(-1).time);
+  const month = latest.getUTCMonth();
+  const day = latest.getUTCDate();
+  const year = latest.getUTCFullYear() - 5;
+  const visibleFromDate = new Date(latest);
+  visibleFromDate.setUTCDate(1);
+  visibleFromDate.setUTCFullYear(year);
+  visibleFromDate.setUTCMonth(month);
+  visibleFromDate.setUTCDate(Math.min(day, new Date(Date.UTC(year, month + 1, 0)).getUTCDate()));
+  const visibleFrom = Math.floor(visibleFromDate.getTime() / 1000);
+
+  return {
+    calculationBars,
+    visibleBars: calculationBars.filter((bar) => bar.time >= visibleFrom),
+    visibleFrom,
+  };
+}
+
+function chartMovingAverage(history, period) {
+  return movingAverage(history.calculationBars, period)
+    .filter((point) => history.visibleFrom === null || point.time >= history.visibleFrom);
 }
 
 export function movingAverage(bars, period) {

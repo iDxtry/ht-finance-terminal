@@ -6,6 +6,7 @@ import {
   GUEST_MARKET_LIMITS,
   isPublicMarketSymbol,
   isPublicSupabaseToken,
+  marketRangeLookbackDays,
   maximumMarketBars,
   selectMarketBars,
 } from '../_shared/market-access.js';
@@ -293,8 +294,8 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       if (!['1Min', '5Min', '15Min', '1Hour', '1Day'].includes(timeframe)) {
         return response({ ok: false, error: 'Choose a supported chart interval.' }, 400, origin);
       }
-      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '2W': 20, '1M': 35, '3M': 100, '6M': 200, '1Y': 370, '2Y': 740, '5Y': 1840, ALL: 0 };
-      if (!(range in lookbackDays)) return response({ ok: false, error: 'Choose a supported chart range.' }, 400, origin);
+      const lookbackDays = marketRangeLookbackDays(range);
+      if (lookbackDays === null) return response({ ok: false, error: 'Choose a supported chart range.' }, 400, origin);
       if (range === 'ALL' && timeframe !== '1Day') {
         return response({ ok: false, error: 'All available history uses daily bars.' }, 400, origin);
       }
@@ -324,7 +325,7 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       url.searchParams.set('sort', newestFirst ? 'desc' : 'asc');
       const start = range === 'ALL'
         ? new Date('1900-01-01T00:00:00.000Z')
-        : new Date(Date.now() - lookbackDays[range] * 86_400_000);
+        : new Date(Date.now() - lookbackDays * 86_400_000);
       url.searchParams.set('start', start.toISOString());
       const rawBars: any[] = [];
       let pageToken: string | null = null;

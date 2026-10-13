@@ -22,3 +22,19 @@ export function shouldExpandMarketChartRange(logicalRange, barCount, range) {
   const edgeTolerance = Math.max(8, Math.ceil(barCount * 0.02));
   return from < -edgeTolerance || to > barCount - 1 + edgeTolerance;
 }
+
+export function clampMarketChartLogicalRange(logicalRange, barCount) {
+  if (!logicalRange || !Number.isFinite(barCount) || barCount < 2) return null;
+  const from = Number(logicalRange.from);
+  const to = Number(logicalRange.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return null;
+
+  const last = barCount - 1;
+  if (from >= 0 && to <= last) return null;
+
+  const span = to - from;
+  if (span >= last) return { from: 0, to: last };
+
+  if (from < 0) return { from: 0, to: span };
+  return { from: last - span, to: last };
+}

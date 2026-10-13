@@ -12,6 +12,26 @@ export const GUEST_MARKET_LIMITS = Object.freeze({
   requestsPerMinute: 30,
 });
 
+export const MARKET_RANGE_LOOKBACK_DAYS = Object.freeze({
+  '1D': 3,
+  '1W': 10,
+  '2W': 20,
+  '1M': 35,
+  '3M': 100,
+  '6M': 200,
+  '1Y': 370,
+  '2Y': 740,
+  // Include about 200 prior trading sessions so SMA 200 covers the full view.
+  '5Y': 2_200,
+  ALL: 0,
+});
+
+export function marketRangeLookbackDays(range) {
+  return Object.hasOwn(MARKET_RANGE_LOOKBACK_DAYS, range)
+    ? MARKET_RANGE_LOOKBACK_DAYS[range]
+    : null;
+}
+
 export function isPublicMarketSymbol(value) {
   return typeof value === 'string' && PUBLIC_MARKET_SYMBOLS.has(value.toUpperCase());
 }
@@ -44,7 +64,8 @@ export function selectMarketBars(rawBars, maximumBars, newestFirst = false) {
 
 export function maximumMarketBars(range, timeframe, defaultLimit) {
   if (timeframe !== '1Day') return defaultLimit;
-  if (range === '5Y') return 1_500;
+  // Five calendar years of display plus a 200-session SMA warm-up and margin.
+  if (range === '5Y') return 1_700;
   // Four Alpaca pages cover about a century of daily sessions. Results stop
   // at the provider's earliest available bar if an instrument is newer.
   return range === 'ALL' ? 40_000 : defaultLimit;

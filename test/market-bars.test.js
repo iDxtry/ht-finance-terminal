@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { maximumMarketBars, selectMarketBars } from '../supabase/functions/_shared/market-access.js';
+import { marketRangeLookbackDays, maximumMarketBars, selectMarketBars } from '../supabase/functions/_shared/market-access.js';
 
 test('five-year daily charts load enough bars to cover five trading years for guests and members', () => {
-  assert.equal(maximumMarketBars('5Y', '1Day', 1_000), 1_500);
+  assert.equal(maximumMarketBars('5Y', '1Day', 1_000), 1_700);
+  assert.equal(marketRangeLookbackDays('5Y'), 2_200);
+  assert.equal(marketRangeLookbackDays('ALL'), 0);
+  assert.equal(marketRangeLookbackDays('unsupported'), null);
   assert.equal(maximumMarketBars('1Y', '1Day', 260), 260);
   assert.equal(maximumMarketBars('5Y', '1Hour', 1_000), 1_000);
 });
