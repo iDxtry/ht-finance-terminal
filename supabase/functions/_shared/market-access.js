@@ -8,7 +8,7 @@ export const PUBLIC_MARKET_SYMBOLS = Object.freeze(new Set([
 
 export const GUEST_MARKET_LIMITS = Object.freeze({
   snapshotSymbols: 12,
-  chartBars: 1_000,
+  chartBars: 10_000,
   requestsPerMinute: 30,
 });
 
@@ -43,7 +43,11 @@ export function selectMarketBars(rawBars, maximumBars, newestFirst = false) {
 }
 
 export function maximumMarketBars(range, timeframe, defaultLimit) {
-  return range === '5Y' && timeframe === '1Day' ? 1_500 : defaultLimit;
+  if (timeframe !== '1Day') return defaultLimit;
+  if (range === '5Y') return 1_500;
+  // Four Alpaca pages cover about a century of daily sessions. Results stop
+  // at the provider's earliest available bar if an instrument is newer.
+  return range === 'ALL' ? 40_000 : defaultLimit;
 }
 
 export async function hashMarketClientKey(clientAddress) {

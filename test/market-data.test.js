@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chartLegend } from '../src/components/price-chart.js';
+import { chartLegend, movingAverage } from '../src/components/price-chart.js';
 import { cleanSymbol, findInstruments, INSTRUMENTS } from '../src/data/universe.js';
 import { isMarketChartRange } from '../src/lib/market-ranges.js';
 import {
@@ -41,6 +41,14 @@ test('chart legend never relabels a historical candle close as the current quote
   assert.equal(legend.price, null);
   assert.equal(legend.volume, 900);
   assert.equal(legend.feed, 'unavailable');
+});
+
+test('200-period simple moving average uses rolling close prices', () => {
+  const bars = Array.from({ length: 201 }, (_, index) => ({ time: index + 1, close: index + 1 }));
+  assert.deepEqual(movingAverage(bars, 200), [
+    { time: 200, value: 100.5 },
+    { time: 201, value: 101.5 },
+  ]);
 });
 
 test('market route accepts supported chart ranges from shared URLs only', () => {
@@ -181,6 +189,25 @@ test('manual refresh bypasses the browser snapshot cache', async () => {
   assert.equal(client.calls.length, 1);
   assert.equal((await loadSnapshots(client, ['SPY'], { force: true })).quotes.SPY.price, 101);
   assert.equal(client.calls.length, 2);
+});
+
+test('all-history chart requests use daily bars and the largest provider page size', async () => {
+  clearMarketCache();
+  const client = publicMarketClient({
+    error: null,
+    data: {
+      ok: true,
+      feed: 'iex',
+      bars: [{ time: 1_800_000_000, open: 100, high: 103, low: 99, close: 102, volume: 1000 }],
+      receivedAt: '2026-10-12T15:00:01Z',
+    },
+  });
+
+  const result = await loadBars(client, 'SPY', 'ALL');
+  assert.equal(result.bars.length, 1);
+  assert.deepEqual(client.calls[0].options.body, {
+    action: 'bars', symbol: 'SPY', timeframe: '1Day', limit: 10_000, range: 'ALL',
+  });
 });
 
 test('expired member sessions fall back to the rate-limited public market allow-list', async () => {

@@ -91,6 +91,9 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
     const apiRolesMigration = await readFile(new URL('supabase/migrations/202610140002_market_budget_new_api_roles.sql', root), 'utf8');
     await db.exec(apiRolesMigration);
     await db.exec(apiRolesMigration);
+    const deleteTeamsMigration = await readFile(new URL('supabase/migrations/202610150001_delete_empty_club_teams.sql', root), 'utf8');
+    await db.exec(deleteTeamsMigration);
+    await db.exec(deleteTeamsMigration);
     assert.deepEqual((await db.query(`select portfolio_owner_id,manager_id from public.portfolio_assignments
       where portfolio_owner_id=$1`, [internOther])).rows, [], 'migration removes a legacy cross-group assignment');
     assert.equal((await db.query(`select count(*)::int as count from public.audit_log
@@ -106,7 +109,12 @@ test('Supabase migration preserves Owner, Manager, Intern, and Quant permission 
       ]);
       await db.query(`select public.save_club_team('GROUP-4','Group #4','Owner-created group')`);
       await assert.rejects(db.query(`select public.save_club_team('bad code','Bad','')`), /Group code must be/);
+      await assert.rejects(db.query(`select public.delete_club_team('GROUP-2')`), /Remove all group members and Managers/);
+      await db.query(`select public.delete_club_team('GROUP-4')`);
+      assert.equal((await db.query(`select count(*)::int as count from public.club_teams where team_code='GROUP-4'`)).rows[0].count, 0);
+      assert.equal((await db.query(`select count(*)::int as count from public.audit_log where action='team.deleted' and details->>'team_code'='GROUP-4'`)).rows[0].count, 1);
     });
+    await assert.rejects(asUser(manager, () => db.query(`select public.delete_club_team('GROUP-1')`)), /Owner access required/);
 
     await db.query(`insert into public.proposals(id,author_id,symbol,side,quantity,thesis,risks) values
       ($1,$4,'AAPL','buy',10,'Long thesis with a durable catalyst and clear upside','Competition could invalidate the thesis'),

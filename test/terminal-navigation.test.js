@@ -78,6 +78,32 @@ test('Owner sees one People & Teams destination for group and member administrat
   assert.doesNotMatch(html, /Users & Permissions|Feed setup|href="#setup"|Manager desk/);
 });
 
+test('Owner can delete only an empty group from People & Teams', () => {
+  const state = baseState({ route: 'admin', role: 'owner', permissions: ['members.manage'] });
+  state.adminTeams = [
+    { team_code: 'GROUP-1', team_name: 'Group #1', active: true, member_count: 1, manager_ids: [] },
+    { team_code: 'GROUP-2', team_name: 'Group #2', active: true, member_count: 0, manager_ids: [] },
+  ];
+  const html = renderApplication(state);
+
+  assert.match(html, /data-action="delete-team" data-team-code="GROUP-1" disabled/);
+  assert.match(html, /data-action="delete-team" data-team-code="GROUP-2" >Delete group/);
+  assert.match(html, /Remove all group members and Managers first/);
+});
+
+test('market chart offers All history and SMA 200 without showing a raw bar count', () => {
+  const state = baseState({ route: 'markets', role: 'visitor', permissions: [] });
+  state.user = null;
+  state.chartRange = 'ALL';
+  state.showSma200 = true;
+  state.market = { source: 'iex', chartSource: 'iex', quotes: new Map(), bars: [], asOf: null, loadingBars: false };
+  const html = renderApplication(state);
+
+  assert.match(html, /data-range="ALL" class="selected"/);
+  assert.match(html, /data-indicator="showSma200"[^>]*>[^<]*<i class="indicator-dot sma200"><\/i>SMA 200/);
+  assert.doesNotMatch(html, /\b\d+ BARS\b/);
+});
+
 test('Intern navigation hides Owner and Quant administration', () => {
   const html = renderApplication(baseState());
   assert.doesNotMatch(html, /href="#admin"|People & Teams|href="#quant"/);

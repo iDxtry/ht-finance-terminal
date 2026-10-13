@@ -284,7 +284,7 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       const symbol = String(input.symbol || '').toUpperCase();
       const timeframe = String(input.timeframe || '1Day');
       const range = String(input.range || '1M');
-      const requestedLimit = Math.min(Math.max(Number(input.limit) || 240, 10), 1000);
+      const requestedLimit = Math.min(Math.max(Number(input.limit) || 240, 10), 10_000);
       const limit = isPublicViewer ? Math.min(requestedLimit, GUEST_MARKET_LIMITS.chartBars) : requestedLimit;
       if (!validSymbol(symbol)) return response({ ok: false, error: 'Choose a valid ticker symbol.' }, 400, origin);
       if (isPublicViewer && !isPublicMarketSymbol(symbol)) {
@@ -293,9 +293,12 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       if (!['1Min', '5Min', '15Min', '1Hour', '1Day'].includes(timeframe)) {
         return response({ ok: false, error: 'Choose a supported chart interval.' }, 400, origin);
       }
-      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840 };
+      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840, ALL: 0 };
       if (!(range in lookbackDays)) return response({ ok: false, error: 'Choose a supported chart range.' }, 400, origin);
-      const newestFirst = isPublicViewer || range === '5Y';
+      if (range === 'ALL' && timeframe !== '1Day') {
+        return response({ ok: false, error: 'All available history uses daily bars.' }, 400, origin);
+      }
+      const newestFirst = range === 'ALL' ? false : isPublicViewer || range === '5Y';
       const maximumBars = maximumMarketBars(range, timeframe, limit);
       const cacheKey = marketBarsCacheKey({
         symbol,
@@ -317,15 +320,16 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       url.searchParams.set('timeframe', timeframe);
       url.searchParams.set('limit', String(limit));
       url.searchParams.set('feed', 'iex');
-      // Five years of daily trading history can exceed 1,000 sessions. Keep
-      // each upstream page at the existing limit, but page far enough to return
-      // the full five-year window for guests and members alike.
+      // Request the full provider history from its earliest supported date.
       url.searchParams.set('sort', newestFirst ? 'desc' : 'asc');
-      const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
+      const start = range === 'ALL'
+        ? new Date('1900-01-01T00:00:00.000Z')
+        : new Date(Date.now() - lookbackDays[range] * 86_400_000);
       url.searchParams.set('start', start.toISOString());
       const rawBars: any[] = [];
       let pageToken: string | null = null;
-      for (let page = 0; page < 3 && rawBars.length < maximumBars; page += 1) {
+      const maxPages = Math.ceil(maximumBars / limit);
+      for (let page = 0; page < maxPages && rawBars.length < maximumBars; page += 1) {
         const budgetError = await requestMarketBudget(1);
         if (budgetError) return budgetError;
         const pageUrl = new URL(url);

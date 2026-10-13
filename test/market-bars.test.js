@@ -8,6 +8,11 @@ test('five-year daily charts load enough bars to cover five trading years for gu
   assert.equal(maximumMarketBars('5Y', '1Hour', 1_000), 1_000);
 });
 
+test('all-history daily charts can page through the maximum available century of provider data', () => {
+  assert.equal(maximumMarketBars('ALL', '1Day', 10_000), 40_000);
+  assert.equal(maximumMarketBars('ALL', '1Hour', 10_000), 10_000);
+});
+
 test('five-year market history keeps the newest capped bars in chronological order', () => {
   const newestFirst = [5, 4, 3, 2, 1].map((time) => ({ time }));
 

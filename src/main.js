@@ -63,6 +63,7 @@ const state = {
   clock: '',
   showSma20: false,
   showSma50: false,
+  showSma200: false,
   market: {
     source: 'unavailable',
     chartSource: 'unavailable',
@@ -213,6 +214,7 @@ function render() {
       range: state.chartRange,
       showSma20: state.showSma20,
       showSma50: state.showSma50,
+      showSma200: state.showSma200,
       readout: document.querySelector('#chart-crosshair-readout'),
       onRangeExpand: expandMarketChartRange,
     });
@@ -1060,6 +1062,17 @@ async function saveClubTeam(form) {
   setNotice(`Group ${teamName} saved.`, 'success');
 }
 
+async function deleteClubTeam(teamCode) {
+  if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
+  const normalizedCode = String(teamCode || '').trim().toUpperCase();
+  if (!normalizedCode) return setNotice('Choose a group to delete.', 'error');
+  if (!window.confirm('Permanently delete the empty group ' + normalizedCode + '? Existing proposal, trade, and audit history will remain.')) return;
+  const { error } = await supabase.rpc('delete_club_team', { p_team_code: normalizedCode });
+  if (error) return setNotice(error.message, 'error');
+  await loadClubData();
+  setNotice('Group ' + normalizedCode + ' deleted.', 'success');
+}
+
 async function assignMemberTeam(form) {
   if (!supabase || !hasPermission('members.manage')) return setNotice('Owner access required.', 'error');
   const teamCode = String(new FormData(form).get('team_code') || '').trim().toUpperCase() || null;
@@ -1172,6 +1185,7 @@ function onAppClick(event) {
     case 'clear-trade-filters': state.tradeSearch = ''; state.tradeFilterSide = 'all'; state.tradeSort = 'newest'; render(); break;
     case 'bootstrap-owner': void bootstrapOwner(); break;
     case 'remove-member': void removeMember(control.dataset.userId); break;
+    case 'delete-team': void deleteClubTeam(control.dataset.teamCode); break;
     default: break;
   }
 }

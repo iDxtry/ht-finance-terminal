@@ -238,6 +238,7 @@ a { color: inherit; }
 .indicator-dot { width: 6px; height: 2px; background: #929ca0; }
 .indicator-dot.sma20 { background: #e3b45c; }
 .indicator-dot.sma50 { background: #78a8d1; }
+.indicator-dot.sma200 { background: #bd8bd3; }
 .price-chart { width: 100%; height: 322px; }
 .chart-empty { display: grid; height: 100%; align-content: center; justify-items: center; gap: 8px; color: #89969b; }
 .chart-empty-mark { color: #7e6b4b; font: 9px var(--mono); letter-spacing: .15em; }
@@ -570,6 +571,10 @@ dialog textarea { resize: vertical; line-height: 1.5; }
 .team-admin-foot { display: grid; gap: 4px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
 .team-admin-foot span { color: #77858a; font: 7px var(--mono); letter-spacing: .08em; }
 .team-admin-foot b { color: #b9c3c0; font-size: 9px; font-weight: 400; }
+.team-admin-delete { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.delete-team { color: #df958c; }
+.delete-team:disabled { color: #687277; cursor: not-allowed; text-decoration: none; }
+.team-admin-delete small { color: #69757a; font-size: 8px; }
 .new-team-form { display: grid; grid-template-columns: minmax(130px, .65fr) minmax(150px, 1fr) minmax(180px, 1.3fr) minmax(220px, 1.7fr) auto; align-items: end; gap: 8px; border-top: 1px solid var(--line); padding: 12px; }
 .new-team-form h3 { margin: 4px 0 0; }
 .admin-table { min-width: 1280px; }

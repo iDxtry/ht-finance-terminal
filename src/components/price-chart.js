@@ -29,9 +29,9 @@ export function mountPriceChart(container, bars, options = {}) {
       borderColor: '#273036',
       timeVisible: options.range === '1D' || options.range === '1W',
       secondsVisible: false,
-      rightOffset: options.range === '5Y' ? 0 : 5,
-      fixLeftEdge: options.range === '5Y',
-      fixRightEdge: options.range === '5Y',
+      rightOffset: ['5Y', 'ALL'].includes(options.range) ? 0 : 5,
+      fixLeftEdge: ['5Y', 'ALL'].includes(options.range),
+      fixRightEdge: ['5Y', 'ALL'].includes(options.range),
     },
     localization: { priceFormatter: (price) => formatMoney(price, { digits: price < 2 ? 4 : 2 }) },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
@@ -65,6 +65,7 @@ export function mountPriceChart(container, bars, options = {}) {
 
   let movingAverage20 = null;
   let movingAverage50 = null;
+  let movingAverage200 = null;
   if (options.showSma20) {
     movingAverage20 = chart.addSeries(LineSeries, {
       color: '#e3b45c', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
@@ -76,6 +77,12 @@ export function mountPriceChart(container, bars, options = {}) {
       color: '#78a8d1', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
     movingAverage50.setData(movingAverage(candles, 50));
+  }
+  if (options.showSma200) {
+    movingAverage200 = chart.addSeries(LineSeries, {
+      color: '#bd8bd3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+    movingAverage200.setData(movingAverage(candles, 200));
   }
 
   const timeScale = chart.timeScale();
@@ -150,7 +157,7 @@ function normalizeBar(bar) {
   return { time: normalizedTime, open, high, low, close, volume: Number.isFinite(volume) && volume >= 0 ? volume : null };
 }
 
-function movingAverage(bars, period) {
+export function movingAverage(bars, period) {
   const points = [];
   let sum = 0;
   bars.forEach((bar, index) => {

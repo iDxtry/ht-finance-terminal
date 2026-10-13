@@ -265,9 +265,9 @@ function marketsPage(state) {
     <div class="market-layout">
       <section class="panel chart-panel">
         <div class="chart-panel-head"><div><div class="eyebrow">PRICE HISTORY / ${h(state.symbol)} / ${h(state.chartRange)}</div><h2>${legend.price ? formatMoney(legend.price) : 'Price chart'} <small id="chart-crosshair-readout">Move crosshair for OHLC</small></h2></div><div class="chart-controls">
-          <div class="segmented" aria-label="Chart range">${['1D', '1W', '1M', '3M', '1Y', '5Y'].map((range) => `<button type="button" data-action="chart-range" data-range="${range}" class="${state.chartRange === range ? 'selected' : ''}" aria-pressed="${state.chartRange === range}">${range}</button>`).join('')}</div>
+          <div class="segmented" aria-label="Chart range">${['1D', '1W', '1M', '3M', '1Y', '5Y', 'ALL'].map((range) => `<button type="button" data-action="chart-range" data-range="${range}" class="${state.chartRange === range ? 'selected' : ''}" aria-pressed="${state.chartRange === range}">${range}</button>`).join('')}</div>
         </div></div>
-        <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><span>${state.market.loadingBars ? 'LOADING BARS…' : `${state.market.bars.length} BARS`} · ${h(state.market.chartSource === 'iex' ? 'IEX' : 'NO DATA')}</span></div>
+        <div class="chart-indicators"><button class="indicator-toggle ${state.showSma20 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma20" aria-pressed="${state.showSma20}"><i class="indicator-dot sma20"></i>SMA 20</button><button class="indicator-toggle ${state.showSma50 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma50" aria-pressed="${state.showSma50}"><i class="indicator-dot sma50"></i>SMA 50</button><button class="indicator-toggle ${state.showSma200 ? 'active' : ''}" type="button" data-action="toggle-indicator" data-indicator="showSma200" aria-pressed="${state.showSma200}"><i class="indicator-dot sma200"></i>SMA 200</button></div>
         <div id="price-chart" class="price-chart" aria-label="Interactive candlestick price chart"></div>
         <div class="chart-credit"><span>${state.market.chartSource === 'iex' ? 'Source: Alpaca IEX · candles and volume reflect IEX prints, not consolidated US volume.' : 'No chart bars are displayed without verified market data.'}</span><a href="https://www.tradingview.com/" rel="noopener" target="_blank">TradingView Lightweight Charts™ ↗</a></div>
       </section>
@@ -634,6 +634,7 @@ function adminPage(state) {
   const teamOptions = (selectedCode = '') => `<option value="">No team assigned</option>${teams.map((team) => `<option value="${h(team.team_code)}" ${selectedCode === team.team_code ? 'selected' : ''} ${team.active === false && selectedCode !== team.team_code ? 'disabled' : ''}>${h(team.team_name || team.team_code)}${team.active === false ? ' · inactive' : ''}</option>`).join('')}`;
   const teamCards = teams.map((team) => {
     const teamManagers = Array.isArray(team.manager_ids) ? team.manager_ids : [];
+    const canDelete = Number(team.member_count || 0) === 0 && teamManagers.length === 0;
     const managerNames = teamManagers.map((id) => state.adminMembers.find((member) => member.user_id === id)).filter(Boolean).map((member) => member.full_name || member.email);
     return `<article class="team-admin-card ${team.active === false ? 'is-inactive' : ''}">
       <div class="team-admin-heading"><div><div class="eyebrow">${h(team.team_code)}</div><h3>${h(team.team_name || team.team_code)}</h3></div><span class="quiet-count">${Number(team.member_count || 0)} members</span></div>
@@ -649,6 +650,7 @@ function adminPage(state) {
         <button class="button compact" type="submit">Save managers</button>
       </form>
       <div class="team-admin-foot"><span>MANAGERS</span><b>${managerNames.length ? h(managerNames.join(' · ')) : 'None assigned'}</b></div>
+      <div class="team-admin-delete"><button class="text-action delete-team" type="button" data-action="delete-team" data-team-code="${h(team.team_code)}" ${canDelete ? '' : 'disabled'}>Delete group</button>${canDelete ? '<small>Existing proposal and trade history is retained.</small>' : '<small>Remove all group members and Managers first.</small>'}</div>
     </article>`;
   }).join('');
   const rosterRows = state.adminMembers.map((member) => {
