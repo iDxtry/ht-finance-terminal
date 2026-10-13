@@ -293,7 +293,7 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       if (!['1Min', '5Min', '15Min', '1Hour', '1Day'].includes(timeframe)) {
         return response({ ok: false, error: 'Choose a supported chart interval.' }, 400, origin);
       }
-      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840, ALL: 0 };
+      const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '2W': 20, '1M': 35, '3M': 100, '6M': 200, '1Y': 370, '2Y': 740, '5Y': 1840, ALL: 0 };
       if (!(range in lookbackDays)) return response({ ok: false, error: 'Choose a supported chart range.' }, 400, origin);
       if (range === 'ALL' && timeframe !== '1Day') {
         return response({ ok: false, error: 'All available history uses daily bars.' }, 400, origin);
