@@ -6,10 +6,10 @@ import { buildPortfolioHistory } from './lib/portfolio-history.js';
 import { encodeCsv } from './lib/csv.js';
 import { backendConfigured, supabase } from './lib/supabase.js';
 import { loadBars, loadSnapshots, MarketDataError } from './services/market-data.js';
-import { isMarketChartRange } from './lib/market-ranges.js';
 import { renderApplication } from './views/terminal-pages.js';
 import { backtestSmaCrossover, simulateMonteCarloGBM } from './quant/index.js';
 import { isPublicMarketSymbol } from '../supabase/functions/_shared/market-access.js';
+import { isMarketChartRange, nextMarketChartRange } from './lib/market-ranges.js';
 
 const app = document.querySelector('#app');
 let watchlistSyncTimer = null;
@@ -99,7 +99,7 @@ function hashState() {
   } catch {
     // An invalid link falls back to the last selected symbol.
   }
-  if (isMarketChartRange(params.get('range'))) state.chartRange = params.get('range');
+  if (params.has('range') && isMarketChartRange(params.get('range'))) state.chartRange = params.get('range');
   state.route = route;
 }
 
@@ -214,6 +214,7 @@ function render() {
       showSma20: state.showSma20,
       showSma50: state.showSma50,
       readout: document.querySelector('#chart-crosshair-readout'),
+      onRangeExpand: expandMarketChartRange,
     });
   }
   if (state.authDialogVisible) document.querySelector('#auth-dialog')?.showModal();
@@ -560,27 +561,70 @@ async function loadChartBars(options = {}) {
   state.market.loadingBars = true;
   if (!options.silent && state.route === 'markets') render();
 
-  state.market.bars = [];
-  state.market.chartSource = 'unavailable';
+  if (!options.keepPrevious) {
+    state.market.bars = [];
+    state.market.chartSource = 'unavailable';
+  }
+  let loaded = false;
   if (supabase) {
     try {
       const result = await loadBars(supabase, symbol, range, { force: options.force === true });
-      if (requestNumber !== chartRequestNumber || symbol !== state.symbol || range !== state.chartRange) return;
-      state.market.bars = result.bars || [];
-      state.market.chartSource = 'iex';
-      if (!state.market.bars.length) state.market.error = `No ${range} history returned for ${symbol}.`;
+      if (requestNumber !== chartRequestNumber || symbol !== state.symbol || range !== state.chartRange) return false;
+      const bars = result.bars || [];
+      if (!bars.length) {
+        state.market.error = `No ${range} history returned for ${symbol}.`;
+        if (!options.keepPrevious) {
+          state.market.bars = [];
+          state.market.chartSource = 'iex';
+        }
+      } else {
+        state.market.bars = bars;
+        state.market.chartSource = 'iex';
+        loaded = true;
+      }
     } catch (error) {
-      if (requestNumber !== chartRequestNumber) return;
-      state.market.bars = [];
-      state.market.chartSource = 'unavailable';
+      if (requestNumber !== chartRequestNumber) return false;
+      if (!options.keepPrevious) {
+        state.market.bars = [];
+        state.market.chartSource = 'unavailable';
+      }
       const detail = error instanceof Error ? error.message : String(error);
       state.market.error = `Verified IEX history is unavailable for ${symbol}. ${detail}`;
     }
   } else {
     state.market.error = 'Verified IEX history is unavailable because the shared market-data client is not configured.';
+    if (!options.keepPrevious) {
+      state.market.bars = [];
+      state.market.chartSource = 'unavailable';
+    }
   }
   state.market.loadingBars = false;
   if (state.route === 'markets') render();
+  return loaded;
+}
+
+async function expandMarketChartRange() {
+  const previousRange = state.chartRange;
+  const nextRange = nextMarketChartRange(previousRange);
+  if (!nextRange) return false;
+  const symbol = state.symbol;
+  state.chartRange = nextRange;
+
+  const query = new URLSearchParams({ symbol });
+  if (nextRange !== '1M') query.set('range', nextRange);
+  const nextHash = `#markets?${query}`;
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${nextHash}`);
+
+  const loaded = await loadChartBars({ silent: true, keepPrevious: true });
+  if (state.symbol !== symbol || state.chartRange !== nextRange) return loaded;
+  if (!loaded) {
+    state.chartRange = previousRange;
+    const previousQuery = new URLSearchParams({ symbol });
+    if (previousRange !== '1M') previousQuery.set('range', previousRange);
+    history.replaceState(history.state, '', `${location.pathname}${location.search}#markets?${previousQuery}`);
+    render();
+  }
+  return loaded;
 }
 
 function dailyHistoryBars(bars) {

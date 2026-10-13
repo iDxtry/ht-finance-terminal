@@ -1,5 +1,6 @@
 import { CandlestickSeries, HistogramSeries, LineSeries, createChart } from 'lightweight-charts';
 import { formatMoney, formatTime } from '../lib/format.js';
+import { shouldExpandMarketChartRange } from '../lib/market-ranges.js';
 
 export function mountPriceChart(container, bars, options = {}) {
   if (!container) return () => {};
@@ -24,7 +25,14 @@ export function mountPriceChart(container, bars, options = {}) {
     },
     crosshair: { mode: 1, vertLine: { color: '#8c9ba4', labelBackgroundColor: '#38434a' }, horzLine: { color: '#8c9ba4', labelBackgroundColor: '#38434a' } },
     rightPriceScale: { borderColor: '#273036', scaleMargins: { top: 0.08, bottom: 0.27 } },
-    timeScale: { borderColor: '#273036', timeVisible: options.range === '1D' || options.range === '1W', secondsVisible: false, rightOffset: 5 },
+    timeScale: {
+      borderColor: '#273036',
+      timeVisible: options.range === '1D' || options.range === '1W',
+      secondsVisible: false,
+      rightOffset: options.range === '5Y' ? 0 : 5,
+      fixLeftEdge: options.range === '5Y',
+      fixRightEdge: options.range === '5Y',
+    },
     localization: { priceFormatter: (price) => formatMoney(price, { digits: price < 2 ? 4 : 2 }) },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
     handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
@@ -70,7 +78,29 @@ export function mountPriceChart(container, bars, options = {}) {
     movingAverage50.setData(movingAverage(candles, 50));
   }
 
-  chart.timeScale().fitContent();
+  const timeScale = chart.timeScale();
+  timeScale.fitContent();
+  let disposed = false;
+  let rangeExpansionRequested = false;
+  const onVisibleRangeChange = (logicalRange) => {
+    if (rangeExpansionRequested || !shouldExpandMarketChartRange(logicalRange, candles.length, options.range)) return;
+    if (typeof options.onRangeExpand !== 'function') {
+      timeScale.fitContent();
+      return;
+    }
+
+    rangeExpansionRequested = true;
+    Promise.resolve(options.onRangeExpand()).then((expanded) => {
+      if (disposed || expanded) return;
+      rangeExpansionRequested = false;
+      timeScale.fitContent();
+    }).catch(() => {
+      if (disposed) return;
+      rangeExpansionRequested = false;
+      timeScale.fitContent();
+    });
+  };
+  timeScale.subscribeVisibleLogicalRangeChange(onVisibleRangeChange);
   const onCrosshairMove = (event) => {
     const point = event.seriesData.get(candleSeries);
     const target = options.readout;
@@ -90,11 +120,11 @@ export function mountPriceChart(container, bars, options = {}) {
   });
   resizeObserver.observe(container);
 
-  let disposed = false;
   return () => {
     if (disposed) return;
     disposed = true;
     resizeObserver.disconnect();
+    timeScale.unsubscribeVisibleLogicalRangeChange(onVisibleRangeChange);
     chart.unsubscribeCrosshairMove(onCrosshairMove);
     chart.remove();
   };

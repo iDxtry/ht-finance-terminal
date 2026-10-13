@@ -6,6 +6,7 @@ import {
   GUEST_MARKET_LIMITS,
   isPublicMarketSymbol,
   isPublicSupabaseToken,
+  maximumMarketBars,
   selectMarketBars,
 } from '../_shared/market-access.js';
 import { marketBarsCacheKey, marketSnapshotCacheKey } from '../_shared/market-cache.js';
@@ -295,7 +296,7 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       const lookbackDays: Record<string, number> = { '1D': 3, '1W': 10, '1M': 35, '3M': 100, '1Y': 370, '5Y': 1840 };
       if (!(range in lookbackDays)) return response({ ok: false, error: 'Choose a supported chart range.' }, 400, origin);
       const newestFirst = isPublicViewer || range === '5Y';
-      const maximumBars = range === '5Y' && timeframe === '1Day' && !isPublicViewer ? 1_500 : limit;
+      const maximumBars = maximumMarketBars(range, timeframe, limit);
       const cacheKey = marketBarsCacheKey({
         symbol,
         timeframe,
@@ -316,9 +317,9 @@ Deno.serve(withSupabase({ auth: 'none' }, async (request, context) => {
       url.searchParams.set('timeframe', timeframe);
       url.searchParams.set('limit', String(limit));
       url.searchParams.set('feed', 'iex');
-      // Long ranges are capped at 1,000 bars. Request the newest bars first so
-      // five-year portfolio history reaches the current market period, then
-      // restore chronological order for charts and portfolio calculations.
+      // Five years of daily trading history can exceed 1,000 sessions. Keep
+      // each upstream page at the existing limit, but page far enough to return
+      // the full five-year window for guests and members alike.
       url.searchParams.set('sort', newestFirst ? 'desc' : 'asc');
       const start = new Date(Date.now() - (lookbackDays[range] || 35) * 86_400_000);
       url.searchParams.set('start', start.toISOString());

@@ -42,6 +42,10 @@ export function selectMarketBars(rawBars, maximumBars, newestFirst = false) {
   return newestFirst ? selected.reverse() : selected;
 }
 
+export function maximumMarketBars(range, timeframe, defaultLimit) {
+  return range === '5Y' && timeframe === '1Day' ? 1_500 : defaultLimit;
+}
+
 export async function hashMarketClientKey(clientAddress) {
   const address = typeof clientAddress === 'string' && clientAddress.trim()
     ? clientAddress.trim().slice(0, 128)

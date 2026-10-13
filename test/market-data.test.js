@@ -121,7 +121,7 @@ test('Edge Function chart cache isolates guest caps from member history', () => 
   });
   const guestKey = marketBarsCacheKey({
     symbol: 'SPY', timeframe: '1Day', range: '5Y', limit: 1000,
-    maximumBars: 1000, viewer: 'guest',
+    maximumBars: 1500, viewer: 'guest',
   });
   assert.notEqual(memberKey, guestKey);
 });
