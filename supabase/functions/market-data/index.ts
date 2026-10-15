@@ -22,6 +22,7 @@ const corsHeaders = {
 
 const allowedOrigins = new Set([
   'https://ht-finance-terminal.vercel.app',
+  'https://hterm.hthsfinance.org',
   'https://idxtry.github.io',
   'http://127.0.0.1:5173',
   'http://localhost:5173',

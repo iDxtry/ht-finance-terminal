@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const allowedOrigins = new Set([
   'https://ht-finance-terminal.vercel.app',
+  'https://hterm.hthsfinance.org',
   'https://idxtry.github.io',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
